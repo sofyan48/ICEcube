@@ -7,7 +7,9 @@ COPY frontend/ ./
 RUN bun run build
 
 # --- backend (Rust); the built UI is embedded into the binary ---
-FROM rust:1.99-slim AS backend
+# The build and runtime images must use the same Debian release (glibc), so
+# both are pinned to trixie / debian13. Change them together.
+FROM rust:1.99-slim-trixie AS backend
 WORKDIR /app/backend
 # Cache dependencies separately from the app code.
 COPY backend/Cargo.toml backend/Cargo.lock ./
@@ -20,7 +22,7 @@ COPY --from=frontend /app/frontend/dist /app/frontend/dist
 RUN touch src/main.rs build.rs && cargo build --release --locked
 
 # --- runtime: a single binary ---
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=backend /app/backend/target/release/icecube /icecube
 ENV ICECUBE_LISTEN=0.0.0.0:4000
 EXPOSE 4000

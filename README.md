@@ -60,8 +60,24 @@ and in `sessionStorage`, so closing the tab signs the user out.
 In production ICEcube is a single process. `cargo build --release` embeds the built UI
 (`frontend/dist`) into the binary with [rust-embed](https://crates.io/crates/rust-embed), so the
 binary serves `/api`, `/healthz` and the UI by itself, with no static folder or separate frontend
-server. Hashed assets are served with long-lived cache headers, and `index.html` is revalidated
-on every load so new releases show up immediately.
+server. The container image (distroless, about 75 MB) contains only that binary.
+
+How the UI is served:
+
+- **Caching:** hashed assets under `assets/` are cached for a year (`immutable`). `index.html` is
+  revalidated on every load with an ETag, so new releases appear immediately and unchanged pages
+  cost a `304`.
+- **Compression:** responses are gzip/brotli compressed. The main bundle drops from about 115 KB
+  to about 40 KB.
+- **Client-side routes:** deep links such as `/users` or `/groups/x` get `index.html`. Missing
+  files and unknown `/api` routes return `404`.
+- **Headers:** `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy` are set.
+- **Shutdown:** the process stops cleanly on SIGTERM.
+
+The service is stateless: everything lives in the Kubernetes API (CRDs, ClusterRoles, bindings,
+Secret), and private keys are never stored. Restarting or rescheduling the pod loses nothing, and
+issued kubeconfigs keep working even while ICEcube is down. Keep it at one replica, though: two
+pods reconciling the same user concurrently could race.
 
 Build the frontend first, because it is embedded at compile time. `make build` does both steps,
 and a release build without `frontend/dist` fails with instructions.
