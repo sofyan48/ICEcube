@@ -2,8 +2,7 @@
 
 [![CI](https://github.com/sofyan48/ICEcube/actions/workflows/ci.yaml/badge.svg)](https://github.com/sofyan48/ICEcube/actions/workflows/ci.yaml)
 
-Kubernetes RBAC manager, inspired by [sighupio/permission-manager](https://github.com/sighupio/permission-manager).
-Create users, grant them permission templates per namespace or cluster-wide, and hand out
+Kubernetes RBAC manager, Create users, grant them permission templates per namespace or cluster-wide, and hand out
 certificate-based kubeconfigs.
 
 - **Backend:** Rust (axum + kube-rs), in `backend/`
