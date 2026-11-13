@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - name: Chart CRDs match the code
+        run: |
+          cargo run --quiet --locked -- crd > /tmp/crds.yaml
+          diff -u ../charts/icecube/crds/icecube-crds.yaml /tmp/crds.yaml \
+            || { echo "::error::Run 'cargo run -- crd > ../charts/icecube/crds/icecube-crds.yaml'"; exit 1; }
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - run: helm lint charts/icecube --strict --set controlPlaneAddress=https://k8s.example.com:6443
+      - run: helm template icecube charts/icecube --set controlPlaneAddress=https://k8s.example.com:6443 --set ingress.enabled=true > /dev/null
+
+  image:
+    # Build only (no push) so Dockerfile breakage shows up on PRs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

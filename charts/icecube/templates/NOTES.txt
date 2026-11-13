@@ -1,0 +1,24 @@
+ICEcube is installed in namespace {{ .Release.Namespace }}.
+
+1. Open the UI:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "icecube.fullname" . }} 4000:{{ .Values.service.port }}
+   then open http://localhost:4000
+{{- end }}
+
+2. Sign in as "{{ .Values.auth.username }}". Get the password with:
+   kubectl -n {{ .Release.Namespace }} get secret {{ include "icecube.secretName" . }} -o jsonpath='{.data.{{ .Values.auth.passwordKey }}}' | base64 -d; echo
+
+3. Kubeconfigs will point users at {{ .Values.controlPlaneAddress }} (cluster "{{ .Values.clusterName }}").
+
+{{- if and .Values.ingress.enabled (not .Values.ingress.tls) }}
+
+WARNING: the ingress has no TLS. ICEcube uses HTTP Basic auth and hands out
+private keys; serve it over HTTPS.
+{{- end }}
+
+ICEcube can grant any permission in the cluster: treat access to it like cluster-admin.

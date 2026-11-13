@@ -1,0 +1,127 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: icecubeusers.icecube.io
+spec:
+  group: icecube.io
+  names:
+    kind: IcecubeUser
+    plural: icecubeusers
+    shortNames:
+    - icu
+    singular: icecubeuser
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.description
+      name: Description
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for IcecubeUserSpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              A user managed by ICEcube. Cluster scoped; it owns all of the user's bindings
+              so deleting it lets the garbage collector clean up whatever is left.
+
+              The spec is the source of truth: the user's RoleBindings/ClusterRoleBindings
+              are always derived from `bindings` plus the bindings of every group in `groups`.
+            properties:
+              bindings:
+                description: |-
+                  Direct grants. `None` only on users created before groups existed; they
+                  are migrated on startup.
+                items:
+                  description: "One grant: a template bound in a namespace, or cluster-wide when `namespace` is `None`."
+                  properties:
+                    namespace:
+                      nullable: true
+                      type: string
+                    template:
+                      type: string
+                  required:
+                  - template
+                  type: object
+                nullable: true
+                type: array
+              description:
+                nullable: true
+                type: string
+              groups:
+                default: []
+                items:
+                  type: string
+                type: array
+            type: object
+        required:
+        - spec
+        title: IcecubeUser
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: icecubegroups.icecube.io
+spec:
+  group: icecube.io
+  names:
+    kind: IcecubeGroup
+    plural: icecubegroups
+    shortNames:
+    - icg
+    singular: icecubegroup
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.defaultForNewUsers
+      name: Default
+      type: boolean
+    - jsonPath: .spec.description
+      name: Description
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for IcecubeGroupSpec via `CustomResource`
+        properties:
+          spec:
+            description: A reusable set of grants. Members get every binding of the group.
+            properties:
+              bindings:
+                default: []
+                items:
+                  description: "One grant: a template bound in a namespace, or cluster-wide when `namespace` is `None`."
+                  properties:
+                    namespace:
+                      nullable: true
+                      type: string
+                    template:
+                      type: string
+                  required:
+                  - template
+                  type: object
+                type: array
+              defaultForNewUsers:
+                default: false
+                description: New users join this group unless the request lists groups explicitly.
+                type: boolean
+              description:
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: IcecubeGroup
+        type: object
+    served: true
+    storage: true

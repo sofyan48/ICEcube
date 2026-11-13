@@ -1,0 +1,124 @@
+# ICEcube: Kubernetes RBAC manager, plain manifests.
+# The Helm chart in charts/icecube is the recommended way to install.
+# Edit the Secret and the CONTROL_PLANE_ADDRESS / CLUSTER_NAME values, then:
+#   kubectl apply -f deploy/icecube.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: icecube
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: icecube
+  namespace: icecube
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: icecube-auth
+  namespace: icecube
+type: Opaque
+stringData:
+  BASIC_AUTH_USER: admin
+  BASIC_AUTH_PASSWORD: change-me
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: icecube
+rules:
+  # Install / update its own CRD and manage users.
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [get, create, patch]
+  - apiGroups: [icecube.io]
+    resources: [icecubeusers, icecubegroups]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list]
+  # Templates are ClusterRoles. `escalate` lets ICEcube create roles with
+  # permissions it does not hold itself; `bind` lets it grant them.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    verbs: [get, list, watch, create, update, patch, delete, escalate, bind]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings, clusterrolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Issue client certificates.
+  - apiGroups: [certificates.k8s.io]
+    resources: [certificatesigningrequests]
+    verbs: [get, list, create, delete]
+  - apiGroups: [certificates.k8s.io]
+    resources: [certificatesigningrequests/approval]
+    verbs: [update, patch]
+  - apiGroups: [certificates.k8s.io]
+    resources: [signers]
+    resourceNames: [kubernetes.io/kube-apiserver-client]
+    verbs: [approve]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: icecube
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: icecube
+subjects:
+  - kind: ServiceAccount
+    name: icecube
+    namespace: icecube
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: icecube
+  namespace: icecube
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: icecube }
+  template:
+    metadata:
+      labels: { app: icecube }
+    spec:
+      serviceAccountName: icecube
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: icecube
+          image: ghcr.io/sofyan48/icecube:0.1.0
+          ports:
+            - { name: http, containerPort: 4000 }
+          env:
+            - { name: CLUSTER_NAME, value: my-cluster }
+            # Public API server URL written into kubeconfigs (in-cluster the
+            # backend only knows the internal service address).
+            - { name: CONTROL_PLANE_ADDRESS, value: "https://k8s.example.com:6443" }
+          envFrom:
+            - secretRef: { name: icecube-auth }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: icecube
+  namespace: icecube
+spec:
+  selector: { app: icecube }
+  ports:
+    - { name: http, port: 80, targetPort: http }

@@ -1,0 +1,105 @@
+# -- Name of the cluster as written into generated kubeconfigs.
+clusterName: kubernetes
+
+# -- Public API server URL written into generated kubeconfigs, e.g.
+# https://k8s.example.com:6443. Required: in-cluster the backend only knows
+# the internal service address, which users cannot reach.
+controlPlaneAddress: ""
+
+# -- Longest lifetime (days) a kubeconfig certificate may be issued for.
+maxCertDays: 365
+
+auth:
+  # -- UI/API username.
+  username: admin
+  # -- UI/API password. Leave empty to generate one (kept across upgrades).
+  # Ignored when existingSecret is set.
+  password: ""
+  # -- Use an existing Secret instead. It must contain the keys below.
+  existingSecret: ""
+  usernameKey: BASIC_AUTH_USER
+  passwordKey: BASIC_AUTH_PASSWORD
+
+crds:
+  # -- CRDs ship in the chart's crds/ directory and are installed by Helm on
+  # first install (Helm never upgrades or deletes them). When true, the
+  # backend also applies them on startup so upgrades pick up schema changes.
+  # Set to false if CRDs are managed elsewhere (GitOps).
+  manageOnStartup: true
+
+image:
+  # Published by .github/workflows/release.yaml on every vX.Y.Z tag.
+  repository: ghcr.io/sofyan48/icecube
+  # -- Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Keep at 1: the backend is not designed to run active/active
+# (concurrent reconciles of the same user could race).
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  # -- Defaults to the fullname.
+  name: ""
+  annotations: {}
+
+rbac:
+  # -- Create the ClusterRole/ClusterRoleBinding ICEcube needs. It must be
+  # able to escalate/bind ClusterRoles and approve client CSRs, so treat
+  # access to the ICEcube UI like cluster-admin.
+  create: true
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt
+  hosts:
+    - host: icecube.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: icecube-tls
+  #    hosts: [icecube.example.com]
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+# -- Log filter (RUST_LOG syntax).
+logLevel: icecube=info,tower_http=info
+
+extraEnv: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

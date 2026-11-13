@@ -1,0 +1,14 @@
+apiVersion: v2
+name: icecube
+description: Kubernetes RBAC manager - users, groups, permission templates and kubeconfigs from a web UI.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"
+keywords:
+  - rbac
+  - kubeconfig
+  - access-management
+home: https://github.com/sofyan48/ICEcube
+sources:
+  - https://github.com/sofyan48/ICEcube

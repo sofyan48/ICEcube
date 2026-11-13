@@ -1,0 +1,96 @@
+{{- if not .Values.controlPlaneAddress }}
+{{- fail "controlPlaneAddress is required: the public API server URL users reach, e.g. --set controlPlaneAddress=https://k8s.example.com:6443" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "icecube.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "icecube.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Never run two pods at once (see replicaCount in values.yaml).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "icecube.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Restart when the generated credentials change.
+        checksum/auth: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "icecube.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "icecube.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: icecube
+          image: {{ include "icecube.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+          env:
+            - name: CLUSTER_NAME
+              value: {{ .Values.clusterName | quote }}
+            - name: CONTROL_PLANE_ADDRESS
+              value: {{ .Values.controlPlaneAddress | quote }}
+            - name: ICECUBE_CERT_DAYS
+              value: {{ .Values.maxCertDays | quote }}
+            - name: ICECUBE_INSTALL_CRDS
+              value: {{ .Values.crds.manageOnStartup | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.logLevel | quote }}
+            - name: BASIC_AUTH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "icecube.secretName" . }}
+                  key: {{ .Values.auth.usernameKey }}
+            - name: BASIC_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "icecube.secretName" . }}
+                  key: {{ .Values.auth.passwordKey }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            # Startup applies CRDs and seeds templates/groups before listening.
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
