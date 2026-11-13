@@ -35,6 +35,7 @@ pub fn router(state: AppState) -> Router {
             get(get_user).put(update_user).delete(delete_user),
         )
         .route("/users/{name}/kubeconfig", post(issue_kubeconfig))
+        .route("/users/{name}/kubeconfig/reissue", post(reissue_kubeconfig))
         .layer(middleware::from_fn_with_state(state.clone(), basic_auth))
         .with_state(state)
 }
@@ -191,4 +192,11 @@ async fn issue_kubeconfig(
     Json(input): Json<KubeconfigInput>,
 ) -> AppResult<Json<KubeconfigDto>> {
     Ok(Json(kubeconfig::issue(&s, &name, input).await?))
+}
+
+async fn reissue_kubeconfig(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> AppResult<Json<KubeconfigDto>> {
+    Ok(Json(kubeconfig::reissue(&s, &name).await?))
 }

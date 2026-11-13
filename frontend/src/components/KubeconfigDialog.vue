@@ -1,33 +1,43 @@
 <script setup lang="ts">
 import { NumberFieldDecrement, NumberFieldIncrement, NumberFieldInput, NumberFieldRoot } from 'reka-ui'
-import { Download, KeyRound, Minus, Plus, ShieldAlert } from 'lucide-vue-next'
+import { Download, History, KeyRound, LoaderCircle, Minus, Plus, RotateCw, ShieldAlert } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { errorMessage } from '@/lib/api'
+import { certState, formatDate, latestCert, relative } from '@/lib/certs'
 import type { IssuedKubeconfig, User } from '@/lib/types'
 import { useClusterStore } from '@/stores/cluster'
 import { useGroupsStore } from '@/stores/groups'
 import { useSessionStore } from '@/stores/session'
 import { useToastStore } from '@/stores/toast'
 import { useUsersStore } from '@/stores/users'
+import CertBadge from './CertBadge.vue'
 import UiButton from './ui/UiButton.vue'
 import UiCode from './ui/UiCode.vue'
 import UiDialog from './ui/UiDialog.vue'
 import UiSelect from './ui/UiSelect.vue'
 
-const props = defineProps<{ user: User | null }>()
+const props = defineProps<{
+  user: User | null
+  /** Re-issue right away with the latest certificate's settings (or defaults). */
+  reissue?: boolean
+}>()
 const open = defineModel<boolean>('open', { required: true })
 
 const users = useUsersStore()
 const cluster = useClusterStore()
 const groups = useGroupsStore()
-const effective = computed(() => (props.user ? groups.effective(props.user) : []))
 const session = useSessionStore()
 const toast = useToastStore()
+
+const effective = computed(() => (props.user ? groups.effective(props.user) : []))
+const last = computed(() => (props.user ? latestCert(props.user) : undefined))
 
 const namespace = ref<string>()
 const days = ref(30)
 const issuing = ref(false)
-const issued = ref<IssuedKubeconfig | null>(null)
+/** The kubeconfig on screen: fresh, or kept from earlier in this browser session. */
+const shown = ref<IssuedKubeconfig | null>(null)
+const showingKept = ref(false)
 const maxDays = computed(() => session.session?.maxCertDays ?? 365)
 
 const namespaceOptions = computed(() => {
@@ -40,29 +50,49 @@ const namespaceOptions = computed(() => {
 
 watch(open, (isOpen) => {
   if (!isOpen) {
-    // The private key exists only here; drop it as soon as the dialog closes.
-    issued.value = null
+    shown.value = null
     return
   }
-  namespace.value = namespaceOptions.value[0]?.value
-  days.value = Math.min(30, maxDays.value)
+  // Prefill from the latest certificate so a manual issue is one click too.
+  const ns = last.value?.namespace
+  namespace.value = ns && namespaceOptions.value.some((o) => o.value === ns) ? ns : namespaceOptions.value[0]?.value
+  days.value = Math.min(last.value?.requestedDays ?? 30, maxDays.value)
+
+  if (props.reissue) {
+    run(() => users.reissueKubeconfig(props.user!.name))
+    return
+  }
+  // Viewing again in the same session needs no new certificate.
+  const kept = props.user ? users.sessionKubeconfig(props.user.name) : undefined
+  shown.value = kept ?? null
+  showingKept.value = !!kept
 })
 
-async function issue() {
-  if (!props.user) return
+async function run(action: () => Promise<IssuedKubeconfig>) {
   issuing.value = true
   try {
-    issued.value = await users.issueKubeconfig(props.user.name, namespace.value ?? null, days.value)
+    shown.value = await action()
+    showingKept.value = false
   } catch (e) {
     toast.error('Could not issue kubeconfig', errorMessage(e))
+    if (props.reissue) open.value = false
   } finally {
     issuing.value = false
   }
 }
 
+const issue = () =>
+  props.user && run(() => users.issueKubeconfig(props.user!.name, namespace.value ?? null, days.value))
+
+/** Back to the form to mint a different certificate. */
+function newCertificate() {
+  shown.value = null
+  showingKept.value = false
+}
+
 function download() {
-  if (!issued.value || !props.user) return
-  const blob = new Blob([issued.value.kubeconfig], { type: 'application/yaml' })
+  if (!shown.value || !props.user) return
+  const blob = new Blob([shown.value.kubeconfig], { type: 'application/yaml' })
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(blob),
     download: `${props.user.name}@${session.session?.clusterName ?? 'cluster'}.kubeconfig`,
@@ -71,17 +101,40 @@ function download() {
   URL.revokeObjectURL(a.href)
 }
 
-const fmt = (iso: string) => new Date(iso).toLocaleString()
+const shortened = computed(() => {
+  const c = shown.value?.certificate
+  if (!c) return false
+  return c.requestedDays * 86_400_000 - (Date.parse(c.expiresAt) - Date.parse(c.issuedAt)) > 3_600_000
+})
+
+const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expired: 'expired' } as const
 </script>
 
 <template>
   <UiDialog
     v-model:open="open"
-    width="lg"
-    :title="`Kubeconfig for ${user?.name ?? ''}`"
-    description="Issues a client certificate signed by the cluster CA."
+    :width="shown ? '2xl' : 'lg'"
+    :title="`${reissue ? 'Re-issue kubeconfig' : 'Kubeconfig'} for ${user?.name ?? ''}`"
+    description="A client certificate signed by the cluster CA."
   >
-    <div v-if="!issued" class="space-y-4">
+    <!-- Issuing (re-issue opens straight into this) -->
+    <div v-if="!shown && issuing && reissue" class="flex flex-col items-center gap-3 py-10 text-sm text-zinc-500">
+      <LoaderCircle class="size-6 animate-spin text-brand-600" />
+      <span v-if="last">
+        Re-issuing with namespace <code class="font-mono">{{ last.namespace }}</code> for {{ Math.min(last.requestedDays, maxDays) }} day(s)…
+      </span>
+      <span v-else>Issuing with default settings…</span>
+    </div>
+
+    <!-- Form -->
+    <div v-else-if="!shown" class="space-y-4">
+      <div v-if="last" class="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+        <span class="text-zinc-500">
+          Latest certificate · <span class="font-mono">{{ last.namespace }}</span> · {{ last.requestedDays }} day(s)
+        </span>
+        <CertBadge :cert="last" />
+      </div>
+
       <div class="grid gap-4 sm:grid-cols-2">
         <label class="block">
           <span class="mb-1.5 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Default namespace</span>
@@ -100,30 +153,80 @@ const fmt = (iso: string) => new Date(iso).toLocaleString()
           </NumberFieldRoot>
         </div>
       </div>
+
       <div class="flex gap-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
         <ShieldAlert class="size-4 shrink-0" />
         <p>
-          Certificates cannot be revoked individually. Removing the user's bindings revokes access immediately;
-          the certificate itself stays valid until it expires, so keep the lifetime short.
+          Issuing a new certificate does not invalidate older ones; they keep working until they expire.
+          Prefer short lifetimes and re-issue when needed.
         </p>
       </div>
+
+      <details v-if="user?.certificates.length" class="text-xs">
+        <summary class="flex cursor-pointer items-center gap-1.5 text-zinc-500 select-none hover:text-zinc-800 dark:hover:text-zinc-200">
+          <History class="size-3.5" /> Certificate history ({{ user.certificates.length }})
+        </summary>
+        <table class="mt-2 w-full">
+          <thead class="text-zinc-400">
+            <tr>
+              <th class="py-1 text-left font-medium">Issued</th>
+              <th class="py-1 text-left font-medium">Expires</th>
+              <th class="py-1 text-left font-medium">Namespace</th>
+              <th class="py-1 text-left font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800">
+            <tr v-for="c in user.certificates" :key="c.serial" :title="`serial ${c.serial}`">
+              <td class="py-1.5">{{ formatDate(c.issuedAt) }}</td>
+              <td class="py-1.5">{{ formatDate(c.expiresAt) }}</td>
+              <td class="py-1.5 font-mono">{{ c.namespace }}</td>
+              <td class="py-1.5" :class="{ 'text-red-600': certState(c) === 'expired', 'text-amber-600': certState(c) === 'expiring' }">
+                {{ stateText[certState(c)] }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </details>
     </div>
 
-    <div v-else class="space-y-3">
-      <p class="text-sm text-zinc-500">
-        This file contains a private key and is shown only once.
-        <template v-if="issued.expiresAt"> It expires on <strong class="text-zinc-700 dark:text-zinc-300">{{ fmt(issued.expiresAt) }}</strong>.</template>
+    <!-- Kubeconfig -->
+    <div v-else class="flex min-h-0 flex-col gap-3">
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-zinc-500">
+        <span>
+          Expires <strong class="text-zinc-700 dark:text-zinc-300">{{ formatDate(shown.certificate.expiresAt) }}</strong>
+          ({{ relative(shown.certificate.expiresAt) }})
+        </span>
+        <span>Namespace <code class="font-mono text-zinc-700 dark:text-zinc-300">{{ shown.certificate.namespace }}</code></span>
+        <span class="font-mono text-xs" :title="shown.certificate.serial">serial {{ shown.certificate.serial.slice(0, 23) }}…</span>
+      </div>
+      <p class="rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800/70 dark:text-zinc-400">
+        <template v-if="showingKept">
+          Issued earlier in this session. You can view and download it again until you reload, close the tab or sign out.
+        </template>
+        <template v-else>
+          Contains a private key that ICEcube does not store. It stays available in this tab until you reload or sign out; after
+          that, issue a new one.
+        </template>
       </p>
-      <UiCode :code="issued.kubeconfig" max-height="22rem" />
+      <p v-if="shortened" class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+        The cluster shortened the lifetime: {{ shown.certificate.requestedDays }} day(s) were requested.
+      </p>
+      <UiCode :code="shown.kubeconfig" wrap max-height="calc(92vh - 22rem)" />
       <p class="font-mono text-xs text-zinc-500">kubectl --kubeconfig ./{{ user?.name }}.kubeconfig get pods</p>
     </div>
 
     <template #footer>
-      <UiButton variant="secondary" @click="open = false">{{ issued ? 'Done' : 'Cancel' }}</UiButton>
-      <UiButton v-if="!issued" :loading="issuing" :disabled="!effective.length" @click="issue">
-        <KeyRound /> Issue kubeconfig
-      </UiButton>
-      <UiButton v-else @click="download"><Download /> Download</UiButton>
+      <UiButton variant="secondary" @click="open = false">{{ shown ? 'Done' : 'Cancel' }}</UiButton>
+      <template v-if="!shown && !reissue">
+        <UiButton variant="secondary" :loading="issuing" :disabled="!effective.length" @click="run(() => users.reissueKubeconfig(user!.name))">
+          <RotateCw /> {{ last ? 'Re-issue as before' : 'Quick issue' }}
+        </UiButton>
+        <UiButton :loading="issuing" :disabled="!effective.length" @click="issue"><KeyRound /> Issue kubeconfig</UiButton>
+      </template>
+      <template v-if="shown">
+        <UiButton variant="secondary" @click="newCertificate"><KeyRound /> New certificate…</UiButton>
+        <UiButton @click="download"><Download /> Download</UiButton>
+      </template>
     </template>
   </UiDialog>
 </template>

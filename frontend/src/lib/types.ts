@@ -37,6 +37,16 @@ export interface User {
   /** Direct grants only. Effective access also includes every group's grants. */
   bindings: Binding[]
   groups: string[]
+  /** Issued certificates, newest first. */
+  certificates: IssuedCertificate[]
+}
+
+export interface IssuedCertificate {
+  serial: string
+  issuedAt: string
+  expiresAt: string
+  namespace: string
+  requestedDays: number
 }
 
 export interface Group {
@@ -62,5 +72,5 @@ export interface Session {
 
 export interface IssuedKubeconfig {
   kubeconfig: string
-  expiresAt: string | null
+  certificate: IssuedCertificate
 }

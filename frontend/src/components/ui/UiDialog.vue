@@ -10,7 +10,7 @@ import {
 } from 'reka-ui'
 import { X } from 'lucide-vue-next'
 
-withDefaults(defineProps<{ title: string; description?: string; width?: 'md' | 'lg' | 'xl' }>(), {
+withDefaults(defineProps<{ title: string; description?: string; width?: 'md' | 'lg' | 'xl' | '2xl' }>(), {
   width: 'md',
 })
 const open = defineModel<boolean>('open', { required: true })
@@ -21,8 +21,8 @@ const open = defineModel<boolean>('open', { required: true })
     <DialogPortal>
       <DialogOverlay class="fixed inset-0 z-40 bg-zinc-950/40 backdrop-blur-sm data-[state=open]:animate-fade-in" />
       <DialogContent
-        class="card fixed top-1/2 left-1/2 z-50 -translate-x-1/2 -translate-y-1/2 flex max-h-[88vh] w-[calc(100vw-2rem)] flex-col overflow-hidden !shadow-2xl outline-none data-[state=open]:animate-zoom-in"
-        :class="{ md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' }[width]"
+        class="card fixed top-1/2 left-1/2 z-50 -translate-x-1/2 -translate-y-1/2 flex max-h-[92vh] w-[calc(100vw-2rem)] flex-col overflow-hidden !shadow-2xl outline-none data-[state=open]:animate-zoom-in"
+        :class="{ md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl', '2xl': 'max-w-6xl' }[width]"
       >
         <header class="flex items-start justify-between gap-4 border-b border-zinc-100 px-6 py-4 dark:border-zinc-800">
           <div>

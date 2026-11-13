@@ -34,6 +34,13 @@ certificate-based kubeconfigs.
 - The private key for a kubeconfig is generated per request, returned once and never stored.
   Certificates cannot be revoked one by one. Removing a user's bindings revokes their access
   immediately, but the certificate stays valid until it expires, so keep lifetimes short.
+- Each issue is recorded in the user's `status.certificates`: serial, issue time, expiry,
+  namespace and requested days. The last 10 are kept, and keys are never stored. Expiry is read
+  from the signed certificate, so it reflects any cap the cluster applies.
+- Short lifetimes are practical because of **re-issue**. The UI marks certificates that are
+  expiring (less than a fifth of their lifetime left, between 1 and 7 days) or expired, has a
+  *Needs re-issue* filter, and re-issues with one click using the previous namespace and lifetime.
+  Re-issuing does not invalidate the old certificate. It keeps working until it expires.
 
 ### Client-side model
 
@@ -103,6 +110,7 @@ All `/api` routes require HTTP Basic auth.
 | PUT    | `/api/users/{name}`            | `{ description, bindings, groups }`, replaces both |
 | DELETE | `/api/users/{name}`            |                                          |
 | POST   | `/api/users/{name}/kubeconfig` | `{ namespace?, expirationDays? }`        |
+| POST   | `/api/users/{name}/kubeconfig/reissue` | no body; same namespace and lifetime as the latest certificate |
 
 A binding is `{ "template": "developer", "namespace": "team-a" }`. Set `"namespace": null` for a
 cluster-wide grant.

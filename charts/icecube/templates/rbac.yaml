@@ -14,6 +14,10 @@ rules:
   - apiGroups: [icecube.io]
     resources: [icecubeusers, icecubegroups]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Certificate history lives in the user's status.
+  - apiGroups: [icecube.io]
+    resources: [icecubeusers/status]
+    verbs: [get, update, patch]
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, list]

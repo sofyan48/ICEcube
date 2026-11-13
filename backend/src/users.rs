@@ -105,6 +105,11 @@ fn to_dto(user: &IcecubeUser) -> UserDto {
             .map(|t| t.0.to_string()),
         bindings,
         groups: user.spec.groups.clone(),
+        certificates: user
+            .status
+            .iter()
+            .flat_map(|s| s.certificates.iter().rev().cloned())
+            .collect(),
     }
 }
 
@@ -119,7 +124,7 @@ pub async fn list(client: &Client) -> AppResult<Vec<UserDto>> {
     Ok(out)
 }
 
-async fn get_cr(client: &Client, name: &str) -> AppResult<IcecubeUser> {
+pub async fn get_cr(client: &Client, name: &str) -> AppResult<IcecubeUser> {
     let api: Api<IcecubeUser> = Api::all(client.clone());
     api.get_opt(name)
         .await?

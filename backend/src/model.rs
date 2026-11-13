@@ -30,6 +30,7 @@ pub const RBAC_GROUP: &str = "rbac.authorization.k8s.io";
     kind = "IcecubeUser",
     plural = "icecubeusers",
     shortname = "icu",
+    status = "IcecubeUserStatus",
     printcolumn = r#"{"name":"Description","type":"string","jsonPath":".spec.description"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
 )]
@@ -43,6 +44,31 @@ pub struct IcecubeUserSpec {
     pub bindings: Option<Vec<BindingDto>>,
     #[serde(default)]
     pub groups: Vec<String>,
+}
+
+/// Kept in the status subresource so spec edits (access changes) and certificate
+/// bookkeeping never overwrite each other.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IcecubeUserStatus {
+    /// Most recent last. Only metadata: private keys are never stored.
+    #[serde(default)]
+    pub certificates: Vec<IssuedCertificate>,
+}
+
+/// Bookkeeping for one issued client certificate. Times are RFC 3339 and
+/// `expiresAt` is read from the signed certificate, so it reflects any cap
+/// the cluster signer applied.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IssuedCertificate {
+    pub serial: String,
+    pub issued_at: String,
+    pub expires_at: String,
+    /// Default namespace written into that kubeconfig.
+    pub namespace: String,
+    /// Lifetime that was requested, reused when re-issuing.
+    pub requested_days: u32,
 }
 
 /// A reusable set of grants. Members get every binding of the group.
@@ -135,6 +161,8 @@ pub struct UserDto {
     /// Direct grants only; the UI combines them with the groups' grants.
     pub bindings: Vec<BindingDto>,
     pub groups: Vec<String>,
+    /// Issued certificates, newest first.
+    pub certificates: Vec<IssuedCertificate>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -194,7 +222,7 @@ pub struct KubeconfigInput {
 #[serde(rename_all = "camelCase")]
 pub struct KubeconfigDto {
     pub kubeconfig: String,
-    pub expires_at: Option<String>,
+    pub certificate: IssuedCertificate,
 }
 
 /// DNS-1123 label: lowercase alphanumerics and '-', max 63 chars.

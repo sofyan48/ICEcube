@@ -58,12 +58,52 @@ spec:
                   type: string
                 type: array
             type: object
+          status:
+            description: |-
+              Kept in the status subresource so spec edits (access changes) and certificate
+              bookkeeping never overwrite each other.
+            nullable: true
+            properties:
+              certificates:
+                default: []
+                description: "Most recent last. Only metadata: private keys are never stored."
+                items:
+                  description: |-
+                    Bookkeeping for one issued client certificate. Times are RFC 3339 and
+                    `expiresAt` is read from the signed certificate, so it reflects any cap
+                    the cluster signer applied.
+                  properties:
+                    expiresAt:
+                      type: string
+                    issuedAt:
+                      type: string
+                    namespace:
+                      description: Default namespace written into that kubeconfig.
+                      type: string
+                    requestedDays:
+                      description: Lifetime that was requested, reused when re-issuing.
+                      format: uint32
+                      minimum: 0.0
+                      type: integer
+                    serial:
+                      type: string
+                  required:
+                  - expiresAt
+                  - issuedAt
+                  - namespace
+                  - requestedDays
+                  - serial
+                  type: object
+                type: array
+            type: object
         required:
         - spec
         title: IcecubeUser
         type: object
     served: true
     storage: true
+    subresources:
+      status: {}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
