@@ -12,3 +12,5 @@ keywords:
 home: https://github.com/sofyan48/ICEcube
 sources:
   - https://github.com/sofyan48/ICEcube
+annotations:
+  artifacthub.io/license: MIT

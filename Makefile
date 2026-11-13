@@ -7,7 +7,7 @@
 # It uses your current kubeconfig (KUBECONFIG or ~/.kube/config), like those commands.
 #
 # Backend settings are the normal env vars and can be passed on the command line,
-# e.g. `make dev CLUSTER_NAME=prod ICECUBE_CERT_DAYS=7`. See README "Configuration".
+# e.g. `make dev CLUSTER_NAME=prod ICECUBE_CERT_DAYS=7`. See docs/development.md "Configuration".
 
 SHELL := /bin/sh
 

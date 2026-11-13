@@ -1,415 +1,176 @@
 # ICEcube
 
 [![CI](https://github.com/sofyan48/ICEcube/actions/workflows/ci.yaml/badge.svg)](https://github.com/sofyan48/ICEcube/actions/workflows/ci.yaml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Kubernetes RBAC manager, Create users, grant them permission templates per namespace or cluster-wide, and hand out
-certificate-based kubeconfigs.
+A web UI for giving people access to your Kubernetes cluster.
 
-- **Backend:** Rust (axum + kube-rs), in `backend/`
-- **Frontend:** Vue 3 + Pinia + Reka UI + Tailwind v4, built with Bun, in `frontend/`
+Create a user, choose what they can do and where, and hand them a ready-to-use kubeconfig.
+You don't need to write any RBAC YAML.
 
-## How it works
+## Features
 
-| Concept    | Kubernetes object                                                                 |
-| ---------- | --------------------------------------------------------------------------------- |
-| User       | `IcecubeUser` (cluster-scoped CRD `icecubeusers.icecube.io`, short name `icu`)    |
-| Group      | `IcecubeGroup` (CRD `icecubegroups.icecube.io`, short name `icg`): a named set of grants |
-| Template   | `ClusterRole` named `icecube-template-<name>`, labelled `icecube.io/template`     |
-| Grant      | `RoleBinding` (in one namespace) or `ClusterRoleBinding` (cluster-wide), named `icecube-<user>-<template>` |
-| Kubeconfig | Client certificate (CN = user) from a `CertificateSigningRequest` using the `kubernetes.io/kube-apiserver-client` signer |
+- **Users:** create people and give them access per namespace or across the whole cluster.
+- **Groups:** bundle access once and reuse it. New users join the `default` group automatically,
+  so they can start right away.
+- **Permission templates:** `viewer`, `developer`, `namespace-lister` and `cluster-viewer` are
+  ready to use, and you can create your own.
+- **Kubeconfig in one click:** download a kubeconfig for any user. When it is about to expire,
+  re-issue it with one click.
+- **Instant changes:** change a user's or a group's access and it applies immediately. Delete a
+  user and their access is gone.
 
-- On startup the backend installs the CRD and seeds four builtin templates: `viewer`, `developer`,
-  `namespace-lister` and `cluster-viewer`.
-- On first install it also creates the `default` group (`cluster-viewer`, `namespace-lister` and
-  `viewer`, all cluster-wide), marked *default for new users*. It is only seeded while no group
-  exists, so you can edit or delete it freely.
-- A user's spec is the source of truth. Effective access is the user's direct grants plus the
-  grants of every group the user is in. Editing a group re-applies access for all of its members
-  right away, and deleting a group removes it from its members.
-- New users join the default groups unless the request lists `groups` explicitly (`[]` means no
-  group).
-- Bindings are reconciled: saving a user creates the missing bindings and deletes the ones that were
-  removed. Each binding is owned by its `IcecubeUser`, so deleting the user also garbage-collects
-  anything left behind.
-- The private key for a kubeconfig is generated per request, returned once and never stored.
-  Certificates cannot be revoked one by one. Removing a user's bindings revokes their access
-  immediately, but the certificate stays valid until it expires, so keep lifetimes short.
-- Each issue is recorded in the user's `status.certificates`: serial, issue time, expiry,
-  namespace and requested days. The last 10 are kept, and keys are never stored. Expiry is read
-  from the signed certificate, so it reflects any cap the cluster applies.
-- Short lifetimes are practical because of **re-issue**. The UI marks certificates that are
-  expiring (less than a fifth of their lifetime left, between 1 and 7 days) or expired, has a
-  *Needs re-issue* filter, and re-issues with one click using the previous namespace and lifetime.
-  Re-issuing does not invalidate the old certificate. It keeps working until it expires.
+## Install
 
-### Client-side model
+You need a Kubernetes cluster (1.30+), `kubectl` with admin access, and Helm 3.8+.
 
-The UI loads users, templates and namespaces once into Pinia stores (`frontend/src/stores`). It then
-does the following without calling the server:
-
-- searching and filtering
-- computing statistics and template usage
-- validating input, using the same rules as the server
-- rendering the exact YAML the backend will create (`frontend/src/lib/rbac.ts`)
-
-User updates are optimistic and roll back if the server rejects them. Credentials are kept in memory
-and in `sessionStorage`, so closing the tab signs the user out.
-
-### One binary
-
-In production ICEcube is a single process. `cargo build --release` embeds the built UI
-(`frontend/dist`) into the binary with [rust-embed](https://crates.io/crates/rust-embed), so the
-binary serves `/api`, `/healthz` and the UI by itself, with no static folder or separate frontend
-server. The container image (distroless, about 75 MB) contains only that binary.
-
-How the UI is served:
-
-- **Caching:** hashed assets under `assets/` are cached for a year (`immutable`). `index.html` is
-  revalidated on every load with an ETag, so new releases appear immediately and unchanged pages
-  cost a `304`.
-- **Compression:** responses are gzip/brotli compressed. The main bundle drops from about 115 KB
-  to about 40 KB.
-- **Client-side routes:** deep links such as `/users` or `/groups/x` get `index.html`. Missing
-  files and unknown `/api` routes return `404`.
-- **Headers:** `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy` are set.
-- **Shutdown:** the process stops cleanly on SIGTERM.
-
-The service is stateless: everything lives in the Kubernetes API (CRDs, ClusterRoles, bindings,
-Secret), and private keys are never stored. Restarting or rescheduling the pod loses nothing, and
-issued kubeconfigs keep working even while ICEcube is down. Keep it at one replica, though: two
-pods reconciling the same user concurrently could race.
-
-Build the frontend first, because it is embedded at compile time. `make build` does both steps,
-and a release build without `frontend/dist` fails with instructions.
-
-During development the UI runs separately on Vite (hot reload) and proxies `/api` to the backend.
-Debug builds also read `frontend/dist` from disk instead of embedding it, so `cargo run` stays fast.
-
-## Development
-
-You need Rust ≥ 1.95, Bun ≥ 1.4, Docker and `kubectl`.
-
-```sh
-# backend: uses ~/.kube/config (or KUBECONFIG)
-cd backend && BASIC_AUTH_PASSWORD=secret cargo run
-
-# frontend: Vite dev server, proxies /api to :4000
-cd frontend && bun install && bun dev
-```
-
-`make dev` runs exactly these two commands in one terminal. Open http://localhost:5173 and sign in
-as `admin` / `secret`. Ctrl+C stops both.
-
-The backend uses your **current kubeconfig** and installs its CRDs, builtin templates and the
-`default` group into that cluster on startup. To try things out without touching a real cluster,
-run `make dev-local`. It starts a throwaway k3s cluster in Docker (namespaces `team-a` and
-`team-b`, kubeconfig in `.dev/kubeconfig`) and runs `make dev` against it. Remove the cluster
-with `make cluster-down`.
-
-Useful targets (run `make` for the full list):
-
-| Target | What it does |
-| --- | --- |
-| `make dev` | Backend + frontend against your current kubeconfig |
-| `make dev-local` | Same, against a throwaway k3s cluster |
-| `make dev-backend` / `make dev-frontend` | Run one side only |
-| `make build` | Build the single release binary `backend/target/release/icecube` with the UI embedded |
-| `make run` | Build it and run it on :4000 |
-| `make lint` | rustfmt, clippy, `vue-tsc`, Helm lint and CRD drift check |
-| `make test` | Backend tests |
-| `make crd` | Regenerate `charts/icecube/crds/` after changing `model.rs` |
-| `make docker-build` | Build the container image |
-| `make cluster-status` | Show the dev cluster and ICEcube objects in it |
-| `make cluster-down` | Delete the dev cluster |
-
-Backend settings are the normal environment variables from [Configuration](#configuration) and can
-be passed to make, for example `make dev CLUSTER_NAME=prod ICECUBE_CERT_DAYS=7`. To point `kubectl`
-at the k3s cluster, run `export KUBECONFIG=$PWD/.dev/kubeconfig`.
-
-### Configuration
-
-| Variable                | Default            | Description                                         |
-| ----------------------- | ------------------ | --------------------------------------------------- |
-| `BASIC_AUTH_PASSWORD`   | *(required)*       | UI/API password                                     |
-| `BASIC_AUTH_USER`       | `admin`            | UI/API username                                     |
-| `CLUSTER_NAME`          | `kubernetes`       | Cluster name used in generated kubeconfigs          |
-| `CONTROL_PLANE_ADDRESS` | client's API URL   | Public API server URL written into kubeconfigs      |
-| `ICECUBE_CERT_DAYS`     | `365`              | Maximum certificate lifetime                        |
-| `ICECUBE_LISTEN`        | `0.0.0.0:4000`     | Listen address                                      |
-| `ICECUBE_INSTALL_CRDS`  | `true`             | Apply the CRDs on startup                           |
-
-`icecube crd` prints the CRD YAML, so you can apply it ahead of time (for example from GitOps).
-
-## API
-
-All `/api` routes require HTTP Basic auth.
-
-| Method | Path                           | Body                                     |
-| ------ | ------------------------------ | ---------------------------------------- |
-| GET    | `/api/session`                 |                                          |
-| GET    | `/api/namespaces`              |                                          |
-| GET    | `/api/templates`               |                                          |
-| POST   | `/api/templates`               | `{ name, scope, description, rules }`    |
-| PUT    | `/api/templates/{name}`        | same as POST (scope cannot change)       |
-| DELETE | `/api/templates/{name}`        | refused while still bound to users       |
-| GET    | `/api/groups`                  |                                          |
-| POST   | `/api/groups`                  | `{ name, description, bindings, defaultForNewUsers }` |
-| PUT    | `/api/groups/{name}`           | same as POST; re-applies access for members |
-| DELETE | `/api/groups/{name}`           | removes the group from its members       |
-| GET    | `/api/users`                   |                                          |
-| POST   | `/api/users`                   | `{ name, description, bindings, groups? }`; without `groups` the user joins the default groups |
-| PUT    | `/api/users/{name}`            | `{ description, bindings, groups }`, replaces both |
-| DELETE | `/api/users/{name}`            |                                          |
-| POST   | `/api/users/{name}/kubeconfig` | `{ namespace?, expirationDays? }`        |
-| POST   | `/api/users/{name}/kubeconfig/reissue` | no body; same namespace and lifetime as the latest certificate |
-
-A binding is `{ "template": "developer", "namespace": "team-a" }`. Set `"namespace": null` for a
-cluster-wide grant.
-
-## Install with Helm
-
-### Prerequisites
-
-- Kubernetes **1.30+**, and `kubectl` access as cluster-admin (the chart creates CRDs and a
-  ClusterRole).
-- Helm **3.8+**, which is the first version that can install charts from OCI registries.
-- The API server must accept **client certificates**, and the `kubernetes.io/kube-apiserver-client`
-  signer must be enabled. Self-managed clusters (kubeadm, k3s, RKE2, and so on) have both by
-  default. Some managed services restrict client-certificate auth or this signer, so check your
-  provider's documentation before installing there.
-
-### 1. Find the API server address for users
-
-Kubeconfigs issued by ICEcube point at `controlPlaneAddress`. It must be an address that **your
-users** can reach, not the in-cluster `kubernetes.default.svc`. Usually it is the same server that
-is in your own kubeconfig:
+**1. Find your cluster's address.** Users will connect to this address with their kubeconfig:
 
 ```sh
 kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}'; echo
 ```
 
-### 2. Write a values file
-
-Start with `values-icecube.yaml`:
-
-```yaml
-clusterName: prod                                  # cluster/context name in kubeconfigs
-controlPlaneAddress: https://k8s.example.com:6443  # from step 1 (required)
-maxCertDays: 90                                    # longest certificate lifetime users can pick
-
-auth:
-  username: admin
-  # password: leave unset to generate one (see step 4)
-
-ingress:
-  enabled: true
-  className: nginx
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt    # if you use cert-manager
-  hosts:
-    - host: icecube.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-  tls:
-    - secretName: icecube-tls
-      hosts: [icecube.example.com]
-```
-
-The ingress is optional. Leave it out and use `kubectl port-forward` instead (step 4).
-
-### 3. Install
-
-From the release published to GHCR:
+**2. Install ICEcube.** Replace the address with the one from step 1:
 
 ```sh
 helm install icecube oci://ghcr.io/sofyan48/charts/icecube \
-  --version 0.1.0 \
   --namespace icecube --create-namespace \
-  -f values-icecube.yaml
+  --set clusterName=my-cluster \
+  --set controlPlaneAddress=https://k8s.example.com:6443
 ```
 
-Or from a checkout of this repository:
-
-```sh
-git clone https://github.com/sofyan48/ICEcube.git && cd ICEcube
-helm install icecube ./charts/icecube \
-  --namespace icecube --create-namespace \
-  -f values-icecube.yaml
-```
-
-Wait for the pod to become ready:
-
-```sh
-kubectl -n icecube rollout status deploy/icecube
-```
-
-On first start ICEcube applies its CRDs, then creates the builtin templates (`viewer`, `developer`,
-`namespace-lister`, `cluster-viewer`) and the `default` group.
-
-### 4. Sign in
-
-Read the password. It is generated if you did not set `auth.password`:
+**3. Get the admin password:**
 
 ```sh
 kubectl -n icecube get secret icecube-auth \
   -o jsonpath='{.data.BASIC_AUTH_PASSWORD}' | base64 -d; echo
 ```
 
-Then open the UI:
-
-- **With an ingress:** go to `https://icecube.example.com`.
-- **Without an ingress:**
-
-  ```sh
-  kubectl -n icecube port-forward svc/icecube 4000:80
-  ```
-
-  Then open http://localhost:4000.
-
-Sign in as `admin`. `helm install` also prints these steps.
-
-### 5. Verify
+**4. Open ICEcube:**
 
 ```sh
-helm test icecube -n icecube
+kubectl -n icecube port-forward svc/icecube 4000:80
 ```
 
-The test pod calls `/healthz` and then an authenticated API endpoint, which proves that the
-service, the credentials and ICEcube's access to the Kubernetes API all work.
+Go to http://localhost:4000 and sign in as `admin` with the password from step 3.
 
-### Common values
+### Open it on a domain
 
-See [`charts/icecube/values.yaml`](charts/icecube/values.yaml) for every option.
-
-| Value                   | Default                    | Description                                                   |
-| ----------------------- | -------------------------- | ------------------------------------------------------------- |
-| `controlPlaneAddress`   | *(required)*               | API server URL written into kubeconfigs                       |
-| `clusterName`           | `kubernetes`               | Cluster name in kubeconfigs                                   |
-| `maxCertDays`           | `365`                      | Longest certificate lifetime                                  |
-| `auth.username`         | `admin`                    | UI username                                                   |
-| `auth.password`         | *(generated)*              | UI password                                                   |
-| `auth.existingSecret`   |                            | Use your own Secret instead (keys `BASIC_AUTH_USER`, `BASIC_AUTH_PASSWORD`) |
-| `ingress.enabled`       | `false`                    | Expose through an Ingress. Always use TLS                     |
-| `crds.manageOnStartup`  | `true`                     | Backend applies the CRDs on startup. Set `false` when CRDs are managed elsewhere |
-| `image.repository`      | `ghcr.io/sofyan48/icecube` | Image                                                         |
-| `image.tag`             | chart `appVersion`         | Image tag                                                     |
-| `resources`             | 20m / 32Mi, limit 128Mi    | Pod resources                                                 |
-
-### Using your own password Secret
+To reach ICEcube on your own domain instead of using port-forward, enable the ingress. Always
+use HTTPS:
 
 ```sh
-kubectl create namespace icecube
-kubectl -n icecube create secret generic icecube-credentials \
-  --from-literal=BASIC_AUTH_USER=admin \
-  --from-literal=BASIC_AUTH_PASSWORD='a-long-random-password'
-
-helm install icecube oci://ghcr.io/sofyan48/charts/icecube -n icecube \
-  -f values-icecube.yaml --set auth.existingSecret=icecube-credentials
+helm upgrade icecube oci://ghcr.io/sofyan48/charts/icecube -n icecube --reuse-values \
+  --set ingress.enabled=true \
+  --set ingress.className=nginx \
+  --set 'ingress.hosts[0].host=icecube.example.com' \
+  --set 'ingress.hosts[0].paths[0].path=/' \
+  --set 'ingress.hosts[0].paths[0].pathType=Prefix' \
+  --set 'ingress.tls[0].secretName=icecube-tls' \
+  --set 'ingress.tls[0].hosts[0]=icecube.example.com'
 ```
 
-### Argo CD / Flux (GitOps)
+## How to use
 
-- **Always set `auth.existingSecret`.** Argo CD renders charts with `helm template`, where the
-  chart cannot look up the existing Secret. A generated password would therefore change on
-  every sync.
-- **To manage CRDs from Git as well**, set `crds.manageOnStartup: false` and apply them
-  yourself. Pick one of:
+### Give someone access
 
-  ```sh
-  kubectl apply -f charts/icecube/crds/icecube-crds.yaml
-  ```
+1. Open **Users** and click **New user**.
+2. Enter a username, for example `jane`. The `default` group is already selected, so Jane can
+   already see the cluster in read-only mode.
+3. Optional: open **Direct access** to give extra rights, for example `developer` in the
+   `team-a` namespace.
+4. Click **Create user**.
 
-  ```sh
-  docker run --rm ghcr.io/sofyan48/icecube:0.1.0 crd | kubectl apply -f -
-  ```
+### Send them a kubeconfig
 
-  With this setting the backend no longer needs permission to change CRDs. It only waits for
-  them to exist.
+1. Click **Kubeconfig** next to the user.
+2. Choose the default namespace and how many days it should be valid.
+3. Click **Issue kubeconfig**, then **Download**.
+4. Send the file to the user. They can use it right away:
 
-### Upgrade
+   ```sh
+   kubectl --kubeconfig jane.kubeconfig get pods
+   ```
+
+The file contains a private key. Send it privately, the same way you would send a password.
+
+### Renew a kubeconfig
+
+A badge next to each user shows when their kubeconfig expires. When it is about to expire, a
+yellow **Re-issue** button appears. Click it to get a new kubeconfig with the same settings.
+Use **Needs re-issue** at the top of the list to see everyone who needs a new one.
+
+### Give many people the same access
+
+1. Open **Groups** and click **New group**, for example `backend-team`.
+2. Choose what the group can access.
+3. Add users to the group when you create or edit them.
+
+When you change a group, all of its members get the new access immediately. Turn on **Default
+for new users** to add every new user to the group automatically.
+
+### Create your own permission
+
+Open **Templates** and click **New template**. Choose which resources (for example `pods`,
+`deployments`) and which actions (`get`, `list`, `create`, ...) it allows. A preview shows exactly
+what will be created.
+
+### Remove access
+
+- **Remove part of someone's access:** edit the user and untick it.
+- **Remove all of someone's access:** delete the user.
+
+Either change applies immediately.
+
+## Good to know
+
+- **Treat ICEcube like an admin account.** Anyone who can sign in can give anyone access to
+  anything. Keep the password safe and use HTTPS.
+- **Keep kubeconfigs short-lived.** A kubeconfig that was already sent cannot be cancelled. It
+  stops working when the user loses access or when it expires. Short lifetimes (for example 7–30
+  days) are safest, and renewing takes one click.
+- **Users don't depend on ICEcube.** Kubeconfigs keep working even if ICEcube is down, and
+  restarting ICEcube loses nothing.
+
+## Upgrade and uninstall
 
 ```sh
-helm upgrade icecube oci://ghcr.io/sofyan48/charts/icecube --version <new> \
-  -n icecube -f values-icecube.yaml
-```
+# upgrade
+helm upgrade icecube oci://ghcr.io/sofyan48/charts/icecube -n icecube --reuse-values
 
-- The generated password is kept across upgrades.
-- Helm never upgrades files in `crds/`. With the default `crds.manageOnStartup: true`, the new
-  version applies its own CRDs when it starts.
-- With `crds.manageOnStartup: false`, apply the new CRDs **before** upgrading.
-
-### Uninstall
-
-```sh
+# uninstall (users and their access stay in the cluster)
 helm uninstall icecube -n icecube
 ```
 
-This only removes the ICEcube app. Helm intentionally keeps CRDs, so your users, groups,
-templates and the access they grant **stay in place** and keep working.
-
-To remove everything ICEcube created and **revoke all access it granted**, run:
+To also remove every user, group and the access they were given:
 
 ```sh
-# Deleting the CRDs deletes all users and groups. Their bindings are garbage-collected.
 kubectl delete crd icecubeusers.icecube.io icecubegroups.icecube.io
-# Templates and any bindings left behind
 kubectl delete clusterrole,clusterrolebinding -l app.kubernetes.io/managed-by=icecube
 kubectl delete rolebinding -A -l app.kubernetes.io/managed-by=icecube
 kubectl delete namespace icecube
 ```
 
-Certificates that were already issued stay valid until they expire. They no longer grant
-anything once the bindings are gone.
+## Troubleshooting
 
-### Troubleshooting
-
-| Symptom | Cause / fix |
+| Problem | What to do |
 | --- | --- |
-| `controlPlaneAddress is required` during install | Set `controlPlaneAddress` (step 1). |
-| Pod in `ImagePullBackOff` | GHCR packages are private until made public. Make `icecube` public, or set `imagePullSecrets`. |
-| Pod restarts with `CRD ... is not installed` | `crds.manageOnStartup` is `false` but the CRDs were never applied. Apply them, see the GitOps section. |
-| Issuing a kubeconfig times out | The cluster is not signing `kubernetes.io/kube-apiserver-client` CSRs. Check that kube-controller-manager has signing enabled. |
-| `kubectl` with the issued kubeconfig gets `Unauthorized` | `controlPlaneAddress` points at an endpoint that does not accept client certificates (for example a proxy). Use the API server address directly. |
-| Password changes after every sync | You are using GitOps without `auth.existingSecret`. See the GitOps section. |
+| Install fails with `controlPlaneAddress is required` | Add `--set controlPlaneAddress=...` (step 1 of Install). |
+| The ICEcube pod does not start (`ImagePullBackOff`) | Check that the cluster can reach `ghcr.io`. |
+| A kubeconfig cannot be issued | Your cluster must allow client certificates. Self-hosted clusters (kubeadm, k3s, RKE2) do by default; some managed services don't. |
+| A kubeconfig gives `Unauthorized` | `controlPlaneAddress` must be the address of the Kubernetes API itself, not a proxy in front of it. |
 
-Logs:
+To see what ICEcube is doing:
 
 ```sh
 kubectl -n icecube logs deploy/icecube
 ```
 
-### Without Helm
+## More
 
-Plain manifests are in [`deploy/icecube.yaml`](deploy/icecube.yaml). Edit the Secret,
-`CLUSTER_NAME` and `CONTROL_PLANE_ADDRESS`, then run `kubectl apply -f deploy/icecube.yaml`.
+- All install options: [`charts/icecube/values.yaml`](charts/icecube/values.yaml)
+- How it works, API and development: [`docs/development.md`](docs/development.md)
 
-### Security
+## License
 
-ICEcube can grant any permission in the cluster. Its service account can escalate and bind
-ClusterRoles and approve client certificates. Treat access to the UI like cluster-admin, serve it
-only over TLS (it uses Basic auth and hands out private keys), and keep `maxCertDays` short.
-
-### Maintaining the chart
-
-The CRDs are kept in `charts/icecube/crds/`. After changing `backend/src/model.rs`, regenerate
-them; CI fails if they drift from the code:
-
-```sh
-cd backend && cargo run -- crd > ../charts/icecube/crds/icecube-crds.yaml
-```
-
-## Releasing
-
-Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yaml`, which:
-
-- builds and pushes `ghcr.io/sofyan48/icecube:X.Y.Z` (amd64 + arm64)
-- packages the chart with version/appVersion `X.Y.Z` and pushes it to `oci://ghcr.io/sofyan48/charts/icecube`
-- creates a GitHub release with the chart attached
-
-```sh
-git tag v0.1.0 && git push origin v0.1.0
-```
-
-GHCR packages are private by default. After the first release, make `icecube` and
-`charts/icecube` public under *Packages → Package settings*, or add an `imagePullSecrets` entry.
+[MIT](LICENSE)

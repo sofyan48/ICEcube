@@ -3,8 +3,8 @@
 A Kubernetes RBAC manager: users, groups and permission templates managed from a web UI, plus
 certificate-based kubeconfigs for each user.
 
-Full guide (prerequisites, ingress, GitOps, upgrade, uninstall, troubleshooting):
-https://github.com/sofyan48/ICEcube#install-with-helm
+How to install and use ICEcube: https://github.com/sofyan48/ICEcube#install
+GitOps and other advanced setups: https://github.com/sofyan48/ICEcube/blob/main/docs/development.md#helm-chart
 
 ## Quick start
 
