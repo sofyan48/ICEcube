@@ -57,23 +57,36 @@ and in `sessionStorage`, so closing the tab signs the user out.
 
 ## Development
 
-You need Rust ≥ 1.95, Bun ≥ 1.4, and a kubeconfig for a cluster where you are admin.
+You need Rust ≥ 1.95, Bun ≥ 1.4, Docker and `kubectl`.
 
 ```sh
-# backend: uses ~/.kube/config (or in-cluster config)
-cd backend
-BASIC_AUTH_PASSWORD=secret CLUSTER_NAME=dev cargo run
-
-# frontend: Vite dev server, proxies /api to :4000
-cd frontend
-bun install
-bun dev
+make cluster-up   # throwaway k3s cluster in Docker, with namespaces team-a and team-b
+make dev          # backend + Vite with hot reload
 ```
 
-Open http://localhost:5173 and sign in as `admin` / `secret`.
+Open http://localhost:5173 and sign in as `admin` / `secret`. Ctrl+C stops both processes.
 
-To serve the built UI from the backend, run `bun run build`. The backend then serves
-`../frontend/dist` on port 4000.
+`make dev` only runs against the k3s dev cluster (`.dev/kubeconfig`), because ICEcube installs
+CRDs, templates and a default group into whatever cluster it talks to. To use another cluster
+anyway, run `make dev ALLOW_ANY_CLUSTER=1`. It then uses `KUBECONFIG` or `~/.kube/config`.
+
+Useful targets (run `make` for the full list):
+
+| Target | What it does |
+| --- | --- |
+| `make dev` | Backend + frontend. The backend restarts on change if `watchexec` or `cargo-watch` is installed (`brew install watchexec`) |
+| `make dev-backend` / `make dev-frontend` | Run one side only |
+| `make run` | Build release binaries and serve the built UI from the backend on :4000 |
+| `make lint` | rustfmt, clippy, `vue-tsc`, Helm lint and CRD drift check |
+| `make test` | Backend tests |
+| `make crd` | Regenerate `charts/icecube/crds/` after changing `model.rs` |
+| `make docker-build` | Build the container image |
+| `make cluster-status` | Show the dev cluster and ICEcube objects in it |
+| `make cluster-down` | Delete the dev cluster |
+
+Settings can be overridden per run, for example
+`make dev API_PORT=4100 BASIC_AUTH_PASSWORD=x CERT_DAYS=7`.
+Use `export KUBECONFIG=.dev/kubeconfig` to point `kubectl` at the dev cluster.
 
 ### Configuration
 
