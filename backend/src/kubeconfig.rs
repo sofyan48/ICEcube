@@ -1,7 +1,7 @@
 //! Issue a client certificate for a user through the Kubernetes CSR API and
-//! wrap it in a kubeconfig. The private key is generated here, returned once,
-//! and never stored; only certificate metadata is recorded in the user's status
-//! so the UI can show expiry and re-issue with the same settings.
+//! wrap it in a kubeconfig. Certificate metadata is recorded in the user's
+//! status (expiry, re-issue settings); the kubeconfig itself is kept in a
+//! Secret by `store` unless that is disabled.
 
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ use crate::{
     groups,
     model::*,
     state::AppState,
-    users,
+    store, users,
 };
 
 const SIGNER: &str = "kubernetes.io/kube-apiserver-client";
@@ -122,11 +122,17 @@ pub async fn issue(
     let yaml = serde_saphyr::to_string(&kubeconfig).map_err(AppError::internal)?;
     let certificate = describe(&cert_pem, namespace, days)?;
     record(state, user, &certificate).await?;
-    tracing::info!(user, days, serial = %certificate.serial, expires_at = %certificate.expires_at, "kubeconfig issued");
-    Ok(KubeconfigDto {
+    let issued = KubeconfigDto {
         kubeconfig: yaml,
         certificate,
-    })
+    };
+    // The certificate is already valid; failing to keep a copy must not hide
+    // it from the admin who just asked for it.
+    if let Err(e) = store::save(state, &cr, &issued).await {
+        tracing::warn!(user, error = %e, "could not store kubeconfig");
+    }
+    tracing::info!(user, days, serial = %issued.certificate.serial, expires_at = %issued.certificate.expires_at, "kubeconfig issued");
+    Ok(issued)
 }
 
 /// Read serial and expiry from the signed certificate.

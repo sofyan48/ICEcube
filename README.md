@@ -24,51 +24,101 @@ You don't need to write any RBAC YAML.
 
 You need a Kubernetes cluster (1.30+), `kubectl` with admin access, and Helm 3.8+.
 
-**1. Find your cluster's address.** Users will connect to this address with their kubeconfig:
+### 1. Find your cluster's address
+
+Users will connect to this address with their kubeconfig. Usually it is the same address you use:
 
 ```sh
 kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}'; echo
 ```
 
-**2. Install ICEcube.** Replace the address with the one from step 1:
+It must be reachable by your users, for example `https://k8s.example.com:6443`, not an internal
+address like `https://10.0.0.1:443`.
+
+### 2. Fill in your settings
+
+Create a file named `values.yaml` and fill it in:
+
+```yaml
+# ── Required ────────────────────────────────────────────────────────────
+
+# The address from step 1. Written into every kubeconfig ICEcube creates.
+controlPlaneAddress: https://k8s.example.com:6443
+
+# ── Recommended ─────────────────────────────────────────────────────────
+
+# A name for this cluster. Users see it in their kubeconfig (e.g. jane@production).
+clusterName: production
+
+# Longest time (in days) a kubeconfig can be valid. Shorter is safer;
+# renewing takes one click.
+maxCertDays: 30
+
+# Sign-in for the ICEcube page.
+auth:
+  username: admin
+  password: ""        # leave empty to generate a random password (see step 4)
+
+# ── Optional: open ICEcube on your own domain ───────────────────────────
+# Leave this out to open it with port-forward instead (step 5).
+ingress:
+  enabled: true
+  className: nginx                       # your ingress controller
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt   # if you use cert-manager
+  hosts:
+    - host: icecube.example.com          # your domain
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:                                   # always use HTTPS
+    - secretName: icecube-tls
+      hosts: [icecube.example.com]
+```
+
+What each setting means:
+
+| Setting | Needed? | What to put |
+| --- | --- | --- |
+| `controlPlaneAddress` | **Required** | Your cluster's address from step 1. Install fails without it. |
+| `clusterName` | Recommended | A short name for the cluster, like `production` or `staging`. Default: `kubernetes`. |
+| `maxCertDays` | Recommended | Maximum kubeconfig lifetime in days. Default: `365`; `7`–`30` is safer. |
+| `auth.username` | Optional | Sign-in name. Default: `admin`. |
+| `auth.password` | Optional | Sign-in password. Leave empty to generate one. |
+| `ingress` | Optional | Only if you want ICEcube on a domain. Set `enabled: true`, your domain in both `hosts` and `tls`, and your controller in `className`. |
+| `storeKubeconfigs` | Optional | `true` (default) lets you download a user's kubeconfig again later. `false` shows it only once. |
+
+You don't need to change any other setting. The full list, with defaults, is in
+[`charts/icecube/values.yaml`](charts/icecube/values.yaml).
+
+### 3. Install ICEcube
 
 ```sh
 helm install icecube oci://ghcr.io/sofyan48/charts/icecube \
   --namespace icecube --create-namespace \
-  --set clusterName=my-cluster \
-  --set controlPlaneAddress=https://k8s.example.com:6443
+  -f values.yaml
 ```
 
-**3. Get the admin password:**
+### 4. Get the admin password
+
+If you left `auth.password` empty, read the generated one:
 
 ```sh
 kubectl -n icecube get secret icecube-auth \
   -o jsonpath='{.data.BASIC_AUTH_PASSWORD}' | base64 -d; echo
 ```
 
-**4. Open ICEcube:**
+### 5. Open ICEcube
 
-```sh
-kubectl -n icecube port-forward svc/icecube 4000:80
-```
+- **With a domain (ingress):** go to `https://icecube.example.com`.
+- **Without a domain:** run the command below, then go to http://localhost:4000.
 
-Go to http://localhost:4000 and sign in as `admin` with the password from step 3.
+  ```sh
+  kubectl -n icecube port-forward svc/icecube 4000:80
+  ```
 
-### Open it on a domain
-
-To reach ICEcube on your own domain instead of using port-forward, enable the ingress. Always
-use HTTPS:
-
-```sh
-helm upgrade icecube oci://ghcr.io/sofyan48/charts/icecube -n icecube --reuse-values \
-  --set ingress.enabled=true \
-  --set ingress.className=nginx \
-  --set 'ingress.hosts[0].host=icecube.example.com' \
-  --set 'ingress.hosts[0].paths[0].path=/' \
-  --set 'ingress.hosts[0].paths[0].pathType=Prefix' \
-  --set 'ingress.tls[0].secretName=icecube-tls' \
-  --set 'ingress.tls[0].hosts[0]=icecube.example.com'
-```
+Sign in with the username and password from your settings, or `admin` and the password from
+step 4.
 
 ## How to use
 
@@ -93,6 +143,9 @@ helm upgrade icecube oci://ghcr.io/sofyan48/charts/icecube -n icecube --reuse-va
    ```
 
 The file contains a private key. Send it privately, the same way you would send a password.
+
+ICEcube keeps the latest kubeconfig of each user. To download it again later, just click
+**View kubeconfig**, even after a refresh or from another computer. You don't need to issue a new one.
 
 ### Renew a kubeconfig
 
@@ -131,16 +184,26 @@ Either change applies immediately.
   days) are safest, and renewing takes one click.
 - **Users don't depend on ICEcube.** Kubeconfigs keep working even if ICEcube is down, and
   restarting ICEcube loses nothing.
+- **Saved kubeconfigs live in the `icecube` namespace.** Only cluster admins should be able to
+  read Secrets there. To turn saving off, install with `--set storeKubeconfigs=false`. A
+  kubeconfig is then only shown right after it is issued.
 
 ## Upgrade and uninstall
 
+To change a setting, edit your `values.yaml` and run the same command as `upgrade`. Do the same
+to update ICEcube to a new version:
+
 ```sh
-# upgrade
-helm upgrade icecube oci://ghcr.io/sofyan48/charts/icecube -n icecube --reuse-values
+# upgrade, or apply changed settings
+helm upgrade icecube oci://ghcr.io/sofyan48/charts/icecube -n icecube -f values.yaml
 
 # uninstall (users and their access stay in the cluster)
 helm uninstall icecube -n icecube
 ```
+
+Keep your `values.yaml` somewhere safe, for example in your infrastructure repository, so you
+can upgrade with the same settings. If it contains a password, don't commit it to a public
+repository.
 
 To also remove every user, group and the access they were given:
 
@@ -155,7 +218,8 @@ kubectl delete namespace icecube
 
 | Problem | What to do |
 | --- | --- |
-| Install fails with `controlPlaneAddress is required` | Add `--set controlPlaneAddress=...` (step 1 of Install). |
+| Install fails with `controlPlaneAddress is required` | Set `controlPlaneAddress` in your `values.yaml` (Install, step 2). |
+| The page doesn't open on your domain | Check `ingress.className` matches your ingress controller, and that your domain points to it. |
 | The ICEcube pod does not start (`ImagePullBackOff`) | Check that the cluster can reach `ghcr.io`. |
 | A kubeconfig cannot be issued | Your cluster must allow client certificates. Self-hosted clusters (kubeadm, k3s, RKE2) do by default; some managed services don't. |
 | A kubeconfig gives `Unauthorized` | `controlPlaneAddress` must be the address of the Kubernetes API itself, not a proxy in front of it. |
@@ -168,7 +232,7 @@ kubectl -n icecube logs deploy/icecube
 
 ## More
 
-- All install options: [`charts/icecube/values.yaml`](charts/icecube/values.yaml)
+- All settings, with defaults: [`charts/icecube/values.yaml`](charts/icecube/values.yaml)
 - How it works, API and development: [`docs/development.md`](docs/development.md)
 
 ## License

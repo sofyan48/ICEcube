@@ -35,9 +35,12 @@ const last = computed(() => (props.user ? latestCert(props.user) : undefined))
 const namespace = ref<string>()
 const days = ref(30)
 const issuing = ref(false)
-/** The kubeconfig on screen: fresh, or kept from earlier in this browser session. */
+/** Loading a previously issued kubeconfig from the server. */
+const loadingKept = ref(false)
+/** The kubeconfig on screen: freshly issued, or the stored latest one. */
 const shown = ref<IssuedKubeconfig | null>(null)
 const showingKept = ref(false)
+const stores = computed(() => session.session?.storesKubeconfigs ?? false)
 const maxDays = computed(() => session.session?.maxCertDays ?? 365)
 
 const namespaceOptions = computed(() => {
@@ -62,11 +65,33 @@ watch(open, (isOpen) => {
     run(() => users.reissueKubeconfig(props.user!.name))
     return
   }
-  // Viewing again in the same session needs no new certificate.
-  const kept = props.user ? users.sessionKubeconfig(props.user.name) : undefined
-  shown.value = kept ?? null
-  showingKept.value = !!kept
+  showKept()
 })
+
+/** Show the latest kubeconfig without minting a new certificate, if one exists. */
+async function showKept() {
+  const name = props.user?.name
+  if (!name) return
+  const local = users.sessionKubeconfig(name)
+  if (local || !stores.value || !last.value) {
+    shown.value = local ?? null
+    showingKept.value = !!local
+    return
+  }
+  loadingKept.value = true
+  try {
+    const kept = await users.fetchKubeconfig(name)
+    // The dialog may have been closed or switched to another user meanwhile.
+    if (open.value && props.user?.name === name) {
+      shown.value = kept ?? null
+      showingKept.value = !!kept
+    }
+  } catch (e) {
+    toast.error('Could not load the kubeconfig', errorMessage(e))
+  } finally {
+    loadingKept.value = false
+  }
+}
 
 async function run(action: () => Promise<IssuedKubeconfig>) {
   issuing.value = true
@@ -124,6 +149,12 @@ const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expire
         Re-issuing with namespace <code class="font-mono">{{ last.namespace }}</code> for {{ Math.min(last.requestedDays, maxDays) }} day(s)…
       </span>
       <span v-else>Issuing with default settings…</span>
+    </div>
+
+    <!-- Loading the stored kubeconfig -->
+    <div v-else-if="!shown && loadingKept" class="flex flex-col items-center gap-3 py-10 text-sm text-zinc-500">
+      <LoaderCircle class="size-6 animate-spin text-brand-600" />
+      Loading the latest kubeconfig…
     </div>
 
     <!-- Form -->
@@ -200,12 +231,13 @@ const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expire
         <span class="font-mono text-xs" :title="shown.certificate.serial">serial {{ shown.certificate.serial.slice(0, 23) }}…</span>
       </div>
       <p class="rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800/70 dark:text-zinc-400">
-        <template v-if="showingKept">
-          Issued earlier in this session. You can view and download it again until you reload, close the tab or sign out.
+        <template v-if="stores">
+          {{ showingKept ? 'This is the latest kubeconfig issued for this user.' : 'Kubeconfig issued.' }}
+          ICEcube keeps it, so you can open and download it again later. It contains a private key: share it privately.
         </template>
         <template v-else>
-          Contains a private key that ICEcube does not store. It stays available in this tab until you reload or sign out; after
-          that, issue a new one.
+          Contains a private key that ICEcube does not store. It stays available in this tab until you reload or sign out;
+          after that, issue a new one.
         </template>
       </p>
       <p v-if="shortened" class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">

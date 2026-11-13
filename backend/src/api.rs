@@ -11,7 +11,9 @@ use serde::Serialize;
 use serde_json::json;
 use subtle::ConstantTimeEq;
 
-use crate::{error::AppResult, groups, kubeconfig, model::*, state::AppState, templates, users};
+use crate::{
+    error::AppResult, groups, kubeconfig, model::*, state::AppState, store, templates, users,
+};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -34,7 +36,10 @@ pub fn router(state: AppState) -> Router {
             "/users/{name}",
             get(get_user).put(update_user).delete(delete_user),
         )
-        .route("/users/{name}/kubeconfig", post(issue_kubeconfig))
+        .route(
+            "/users/{name}/kubeconfig",
+            get(get_kubeconfig).post(issue_kubeconfig),
+        )
         .route("/users/{name}/kubeconfig/reissue", post(reissue_kubeconfig))
         .layer(middleware::from_fn_with_state(state.clone(), basic_auth))
         .with_state(state)
@@ -73,6 +78,7 @@ struct Session {
     cluster_name: String,
     server: String,
     max_cert_days: u32,
+    stores_kubeconfigs: bool,
 }
 
 async fn session(State(s): State<AppState>) -> Json<Session> {
@@ -81,6 +87,7 @@ async fn session(State(s): State<AppState>) -> Json<Session> {
         cluster_name: s.config.cluster_name.clone(),
         server: s.server_url.clone(),
         max_cert_days: s.config.cert_days,
+        stores_kubeconfigs: s.config.store_kubeconfigs,
     })
 }
 
@@ -183,7 +190,17 @@ async fn delete_group(
 
 async fn delete_user(State(s): State<AppState>, Path(name): Path<String>) -> AppResult<StatusCode> {
     users::delete(&s.client, &name).await?;
+    // Also garbage-collected through its owner reference; deleting it here
+    // removes it right away.
+    store::delete(&s, &name).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_kubeconfig(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> AppResult<Json<KubeconfigDto>> {
+    Ok(Json(store::load(&s, &name).await?))
 }
 
 async fn issue_kubeconfig(

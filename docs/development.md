@@ -29,9 +29,17 @@ This page is for people working on ICEcube itself. To install and use it, see th
 - Bindings are reconciled: saving a user creates the missing bindings and deletes the ones that
   were removed. Each binding is owned by its `IcecubeUser`, so deleting the user also
   garbage-collects anything left behind.
-- The private key for a kubeconfig is generated per request, returned once and never stored.
-  Certificates cannot be revoked one by one. Removing a user's bindings revokes their access
-  immediately, but the certificate stays valid until it expires, so keep lifetimes short.
+- The private key for a kubeconfig is generated per request. Certificates cannot be revoked one
+  by one. Removing a user's bindings revokes their access immediately, but the certificate stays
+  valid until it expires, so keep lifetimes short.
+- The latest kubeconfig of each user is kept in a Secret `icecube-kubeconfig-<user>` in ICEcube's
+  namespace (keys `kubeconfig` and `certificate.json`). It is overwritten on every issue and owned
+  by the `IcecubeUser`, so deleting the user deletes it. `GET /api/users/{name}/kubeconfig` returns
+  it. Access to it is granted by a namespaced Role, so ICEcube cannot read Secrets anywhere else.
+  Anyone who can read Secrets in that namespace can already read the admin password and mint any
+  kubeconfig, so this does not widen who can act as a user. Set `ICECUBE_STORE_KUBECONFIGS=false`
+  (Helm: `storeKubeconfigs: false`) to keep nothing; a kubeconfig is then only shown right after
+  it is issued.
 - Each issue is recorded in the user's `status.certificates`: serial, issue time, expiry,
   namespace and requested days. The last 10 are kept, and keys are never stored. Expiry is read
   from the signed certificate, so it reflects any cap the cluster applies.
@@ -56,8 +64,8 @@ The UI loads users, groups, templates and namespaces once into Pinia stores
 - rendering the exact YAML the backend will create (`frontend/src/lib/rbac.ts`)
 
 User updates are optimistic and roll back if the server rejects them. Credentials are kept in
-memory and in `sessionStorage`, so closing the tab signs the user out. Kubeconfigs issued in the
-current tab are kept in memory only, so they can be viewed again until the page is reloaded.
+memory and in `sessionStorage`, so closing the tab signs the user out. Kubeconfigs are cached in
+memory only (never in browser storage) and fetched from the server again after a reload.
 
 ### One binary
 
@@ -134,6 +142,8 @@ the backend runs from `backend/`.
 | `ICECUBE_CERT_DAYS`     | `365`              | Maximum certificate lifetime |
 | `ICECUBE_LISTEN`        | `0.0.0.0:4000`     | Listen address |
 | `ICECUBE_INSTALL_CRDS`  | `true`             | Apply the CRDs on startup |
+| `ICECUBE_STORE_KUBECONFIGS` | `true`         | Keep each user's latest kubeconfig in a Secret |
+| `ICECUBE_NAMESPACE`     | pod / context namespace | Namespace for those Secrets |
 | `RUST_LOG`              | `icecube=info,tower_http=info` | Log filter |
 
 `icecube crd` prints the CRD YAML, so you can apply it ahead of time (for example from GitOps).
@@ -158,6 +168,7 @@ All `/api` routes require HTTP Basic auth.
 | POST   | `/api/users` | `{ name, description, bindings, groups? }`; without `groups` the user joins the default groups |
 | PUT    | `/api/users/{name}` | `{ description, bindings, groups }`, replaces both |
 | DELETE | `/api/users/{name}` | |
+| GET    | `/api/users/{name}/kubeconfig` | the stored latest kubeconfig (`404` if none or storage is off) |
 | POST   | `/api/users/{name}/kubeconfig` | `{ namespace?, expirationDays? }` |
 | POST   | `/api/users/{name}/kubeconfig/reissue` | no body; same settings as the latest certificate |
 

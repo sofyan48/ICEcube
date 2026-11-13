@@ -31,6 +31,7 @@ written into every kubeconfig ICEcube issues.
 | `controlPlaneAddress` | `""` | **Required.** API server URL written into kubeconfigs |
 | `clusterName` | `kubernetes` | Cluster/context name in kubeconfigs |
 | `maxCertDays` | `365` | Longest certificate lifetime |
+| `storeKubeconfigs` | `true` | Keep each user's latest kubeconfig (a Secret in the release namespace) so it can be downloaded again |
 | `auth.username` | `admin` | UI username |
 | `auth.password` | `""` | UI password. Generated and kept across upgrades when empty |
 | `auth.existingSecret` | `""` | Existing Secret holding the credentials (use this with GitOps) |

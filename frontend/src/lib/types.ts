@@ -68,6 +68,8 @@ export interface Session {
   clusterName: string
   server: string
   maxCertDays: number
+  /** The server keeps each user's latest kubeconfig and can return it again. */
+  storesKubeconfigs: boolean
 }
 
 export interface IssuedKubeconfig {

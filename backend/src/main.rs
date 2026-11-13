@@ -5,6 +5,7 @@ mod groups;
 mod kubeconfig;
 mod model;
 mod state;
+mod store;
 mod templates;
 mod ui;
 mod users;

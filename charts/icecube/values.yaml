@@ -9,6 +9,11 @@ controlPlaneAddress: ""
 # -- Longest lifetime (days) a kubeconfig certificate may be issued for.
 maxCertDays: 365
 
+# -- Keep each user's latest kubeconfig (one Secret per user in this release's
+# namespace) so it can be viewed and downloaded again later. When false, a
+# kubeconfig is only shown right after it is issued.
+storeKubeconfigs: true
+
 auth:
   # -- UI/API username.
   username: admin

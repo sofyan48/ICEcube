@@ -11,11 +11,16 @@ pub struct Config {
     pub control_plane_address: Option<String>,
     pub auth_user: String,
     pub auth_password: String,
-
     pub cert_days: u32,
     /// Install/upgrade the CRDs on startup. Turn off when they are managed
     /// elsewhere (Helm `crds/`, GitOps); the backend then only waits for them.
     pub install_crds: bool,
+    /// Keep each user's latest kubeconfig in a Secret so it can be viewed and
+    /// downloaded again later.
+    pub store_kubeconfigs: bool,
+    /// Namespace for those Secrets. Defaults to the namespace ICEcube runs in
+    /// (or the kubeconfig context's namespace when run locally).
+    pub namespace: Option<String>,
 }
 
 impl Config {
@@ -41,15 +46,21 @@ impl Config {
                 .filter(|s| !s.is_empty()),
             auth_user: env_or("BASIC_AUTH_USER", "admin"),
             auth_password,
-
             cert_days,
-            install_crds: !matches!(
-                env_or("ICECUBE_INSTALL_CRDS", "true")
-                    .to_ascii_lowercase()
-                    .as_str(),
-                "false" | "0" | "no"
-            ),
+            install_crds: env_bool("ICECUBE_INSTALL_CRDS", true),
+            store_kubeconfigs: env_bool("ICECUBE_STORE_KUBECONFIGS", true),
+            namespace: std::env::var("ICECUBE_NAMESPACE")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
+    }
+}
+
+fn env_bool(key: &str, default: bool) -> bool {
+    match std::env::var(key).map(|v| v.to_ascii_lowercase()) {
+        Ok(v) if matches!(v.as_str(), "false" | "0" | "no") => false,
+        Ok(v) if matches!(v.as_str(), "true" | "1" | "yes") => true,
+        _ => default,
     }
 }
 

@@ -13,12 +13,14 @@ import { latestCert } from '@/lib/certs'
 import type { User } from '@/lib/types'
 import { useClusterStore } from '@/stores/cluster'
 import { useGroupsStore } from '@/stores/groups'
+import { useSessionStore } from '@/stores/session'
 import { useToastStore } from '@/stores/toast'
 import { useUsersStore } from '@/stores/users'
 
 const users = useUsersStore()
 const cluster = useClusterStore()
 const groups = useGroupsStore()
+const session = useSessionStore()
 const toast = useToastStore()
 
 const selected = ref<User | null>(null)
@@ -67,6 +69,10 @@ async function confirmDelete() {
 
 const canIssue = (u: User) => groups.effective(u).length > 0
 const shouldReissue = (u: User) => ['expiring', 'expired'].includes(users.stateOf(u))
+/** A kubeconfig that can be opened again without issuing a new one. */
+const canView = (u: User) =>
+  !!users.sessionKubeconfig(u.name) ||
+  (!!session.session?.storesKubeconfigs && users.stateOf(u) === 'valid')
 
 const initials = (n: string) => n.split('-').map((p) => p[0]).join('').slice(0, 2).toUpperCase()
 const hue = (n: string) => [...n].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0)
@@ -156,7 +162,7 @@ const filterItem =
           </button>
 
           <UiButton
-            v-if="users.sessionKubeconfig(u.name) && !shouldReissue(u)"
+            v-if="canView(u) && !shouldReissue(u)"
             variant="secondary"
             size="sm"
             class="hidden sm:inline-flex"

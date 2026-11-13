@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { sortBindings } from '@/lib/rbac'
 import { certState, latestCert, type CertState } from '@/lib/certs'
 import type { Binding, IssuedKubeconfig, User } from '@/lib/types'
@@ -109,16 +109,36 @@ export const useUsersStore = defineStore('users', () => {
   }
 
   /**
-   * Kubeconfigs issued in this browser session, kept so they can be viewed and
-   * downloaded again without minting a new certificate. Memory only: never
-   * written to storage, gone on reload, tab close or sign-out. The server never
-   * stores private keys, so after that a new certificate is the only way.
+   * Kubeconfigs seen in this tab (issued here or fetched from the server).
+   * Memory only, never written to browser storage. The server keeps the
+   * latest one per user, so after a reload `fetchKubeconfig` gets it back.
    */
   const issuedThisSession = ref<Record<string, IssuedKubeconfig>>({})
 
+  const isValid = (k: IssuedKubeconfig | undefined) =>
+    !!k && Date.parse(k.certificate.expiresAt) > Date.now()
+
   function sessionKubeconfig(name: string): IssuedKubeconfig | undefined {
     const k = issuedThisSession.value[name]
-    return k && Date.parse(k.certificate.expiresAt) > Date.now() ? k : undefined
+    return isValid(k) ? k : undefined
+  }
+
+  /**
+   * The user's latest kubeconfig: from memory, else from the server. Returns
+   * undefined when there is none or it has expired.
+   */
+  async function fetchKubeconfig(name: string): Promise<IssuedKubeconfig | undefined> {
+    const cached = sessionKubeconfig(name)
+    if (cached) return cached
+    try {
+      const k = await api.get<IssuedKubeconfig>(`/users/${encodeURIComponent(name)}/kubeconfig`)
+      if (!isValid(k)) return undefined
+      issuedThisSession.value = { ...issuedThisSession.value, [name]: k }
+      return k
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return undefined
+      throw e
+    }
   }
 
   /** Record the new certificate locally so status badges update without a reload. */
@@ -165,6 +185,7 @@ export const useUsersStore = defineStore('users', () => {
     issueKubeconfig,
     reissueKubeconfig,
     sessionKubeconfig,
+    fetchKubeconfig,
     stateOf,
     reset,
   }

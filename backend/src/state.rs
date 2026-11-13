@@ -16,6 +16,8 @@ pub struct Inner {
     pub server_url: String,
     /// Cluster CA as PEM, embedded into generated kubeconfigs.
     pub ca_pem: Option<String>,
+    /// Namespace ICEcube keeps its own objects in (stored kubeconfigs).
+    pub namespace: String,
 }
 
 impl std::ops::Deref for AppState {
@@ -49,6 +51,13 @@ impl AppState {
             .trim_end_matches('/')
             .to_string();
 
+        // In a pod this is the ServiceAccount's namespace; locally, the
+        // kubeconfig context's namespace.
+        let namespace = config
+            .namespace
+            .clone()
+            .unwrap_or_else(|| kube_config.default_namespace.clone());
+
         let client = Client::try_from(kube_config).context("building Kubernetes client")?;
 
         Ok(Self(Arc::new(Inner {
@@ -56,6 +65,7 @@ impl AppState {
             config,
             server_url,
             ca_pem,
+            namespace,
         })))
     }
 }
