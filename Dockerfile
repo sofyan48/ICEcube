@@ -1,24 +1,27 @@
 # --- frontend (Bun) ---
 FROM oven/bun:1.4 AS frontend
-WORKDIR /app
+WORKDIR /app/frontend
 COPY frontend/package.json frontend/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY frontend/ ./
 RUN bun run build
 
-# --- backend (Rust) ---
+# --- backend (Rust); the built UI is embedded into the binary ---
 FROM rust:1.99-slim AS backend
-WORKDIR /app
+WORKDIR /app/backend
+# Cache dependencies separately from the app code.
 COPY backend/Cargo.toml backend/Cargo.lock ./
-RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
+RUN mkdir src && echo 'fn main() {}' > src/main.rs \
+    && ICECUBE_ALLOW_NO_UI=1 cargo build --release --locked \
+    && rm -rf src
+COPY backend/build.rs ./
 COPY backend/src ./src
-RUN touch src/main.rs && cargo build --release
+COPY --from=frontend /app/frontend/dist /app/frontend/dist
+RUN touch src/main.rs build.rs && cargo build --release --locked
 
-# --- runtime ---
+# --- runtime: a single binary ---
 FROM gcr.io/distroless/cc-debian12:nonroot
-WORKDIR /app
-COPY --from=backend /app/target/release/icecube /app/icecube
-COPY --from=frontend /app/dist /app/static
-ENV ICECUBE_STATIC_DIR=/app/static ICECUBE_LISTEN=0.0.0.0:4000
+COPY --from=backend /app/backend/target/release/icecube /icecube
+ENV ICECUBE_LISTEN=0.0.0.0:4000
 EXPOSE 4000
-ENTRYPOINT ["/app/icecube"]
+ENTRYPOINT ["/icecube"]

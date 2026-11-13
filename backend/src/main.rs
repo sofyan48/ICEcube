@@ -6,6 +6,7 @@ mod kubeconfig;
 mod model;
 mod state;
 mod templates;
+mod ui;
 mod users;
 
 use std::time::Duration;
@@ -18,10 +19,7 @@ use kube::{
     api::{Patch, PatchParams},
 };
 use serde::de::DeserializeOwned;
-use tower_http::{
-    services::{ServeDir, ServeFile},
-    trace::TraceLayer,
-};
+use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -61,13 +59,12 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("migrating users to spec bindings")?;
 
-    let index = config.static_dir.join("index.html");
-    let spa = ServeDir::new(&config.static_dir).fallback(ServeFile::new(index));
-
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .nest("/api", api::router(state.clone()))
-        .fallback_service(spa)
+        .fallback(ui::serve)
+        // gzip/brotli for the UI bundle and JSON; skips tiny and already-compressed bodies.
+        .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
@@ -75,14 +72,34 @@ async fn main() -> anyhow::Result<()> {
         listen = %config.listen,
         cluster = %config.cluster_name,
         server = %state.server_url,
+        ui_files = ui::file_count(),
         "ICEcube is ready"
     );
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Ctrl+C locally, SIGTERM when Kubernetes stops the pod.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            s.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {},
+        () = term => {},
+    }
+    tracing::info!("shutting down");
 }
 
 async fn ensure_crd<K>(state: &AppState) -> anyhow::Result<()>

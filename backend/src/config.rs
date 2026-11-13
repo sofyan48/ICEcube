@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::net::SocketAddr;
 
 use anyhow::{Context, bail};
 
@@ -11,7 +11,7 @@ pub struct Config {
     pub control_plane_address: Option<String>,
     pub auth_user: String,
     pub auth_password: String,
-    pub static_dir: PathBuf,
+
     pub cert_days: u32,
     /// Install/upgrade the CRDs on startup. Turn off when they are managed
     /// elsewhere (Helm `crds/`, GitOps); the backend then only waits for them.
@@ -41,7 +41,7 @@ impl Config {
                 .filter(|s| !s.is_empty()),
             auth_user: env_or("BASIC_AUTH_USER", "admin"),
             auth_password,
-            static_dir: env_or("ICECUBE_STATIC_DIR", "../frontend/dist").into(),
+
             cert_days,
             install_crds: !matches!(
                 env_or("ICECUBE_INSTALL_CRDS", "true")

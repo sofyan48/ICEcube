@@ -55,28 +55,50 @@ does the following without calling the server:
 User updates are optimistic and roll back if the server rejects them. Credentials are kept in memory
 and in `sessionStorage`, so closing the tab signs the user out.
 
+### One binary
+
+In production ICEcube is a single process. `cargo build --release` embeds the built UI
+(`frontend/dist`) into the binary with [rust-embed](https://crates.io/crates/rust-embed), so the
+binary serves `/api`, `/healthz` and the UI by itself, with no static folder or separate frontend
+server. Hashed assets are served with long-lived cache headers, and `index.html` is revalidated
+on every load so new releases show up immediately.
+
+Build the frontend first, because it is embedded at compile time. `make build` does both steps,
+and a release build without `frontend/dist` fails with instructions.
+
+During development the UI runs separately on Vite (hot reload) and proxies `/api` to the backend.
+Debug builds also read `frontend/dist` from disk instead of embedding it, so `cargo run` stays fast.
+
 ## Development
 
 You need Rust ≥ 1.95, Bun ≥ 1.4, Docker and `kubectl`.
 
 ```sh
-make cluster-up   # throwaway k3s cluster in Docker, with namespaces team-a and team-b
-make dev          # backend + Vite with hot reload
+# backend: uses ~/.kube/config (or KUBECONFIG)
+cd backend && BASIC_AUTH_PASSWORD=secret cargo run
+
+# frontend: Vite dev server, proxies /api to :4000
+cd frontend && bun install && bun dev
 ```
 
-Open http://localhost:5173 and sign in as `admin` / `secret`. Ctrl+C stops both processes.
+`make dev` runs exactly these two commands in one terminal. Open http://localhost:5173 and sign in
+as `admin` / `secret`. Ctrl+C stops both.
 
-`make dev` only runs against the k3s dev cluster (`.dev/kubeconfig`), because ICEcube installs
-CRDs, templates and a default group into whatever cluster it talks to. To use another cluster
-anyway, run `make dev ALLOW_ANY_CLUSTER=1`. It then uses `KUBECONFIG` or `~/.kube/config`.
+The backend uses your **current kubeconfig** and installs its CRDs, builtin templates and the
+`default` group into that cluster on startup. To try things out without touching a real cluster,
+run `make dev-local`. It starts a throwaway k3s cluster in Docker (namespaces `team-a` and
+`team-b`, kubeconfig in `.dev/kubeconfig`) and runs `make dev` against it. Remove the cluster
+with `make cluster-down`.
 
 Useful targets (run `make` for the full list):
 
 | Target | What it does |
 | --- | --- |
-| `make dev` | Backend + frontend. The backend restarts on change if `watchexec` or `cargo-watch` is installed (`brew install watchexec`) |
+| `make dev` | Backend + frontend against your current kubeconfig |
+| `make dev-local` | Same, against a throwaway k3s cluster |
 | `make dev-backend` / `make dev-frontend` | Run one side only |
-| `make run` | Build release binaries and serve the built UI from the backend on :4000 |
+| `make build` | Build the single release binary `backend/target/release/icecube` with the UI embedded |
+| `make run` | Build it and run it on :4000 |
 | `make lint` | rustfmt, clippy, `vue-tsc`, Helm lint and CRD drift check |
 | `make test` | Backend tests |
 | `make crd` | Regenerate `charts/icecube/crds/` after changing `model.rs` |
@@ -84,9 +106,9 @@ Useful targets (run `make` for the full list):
 | `make cluster-status` | Show the dev cluster and ICEcube objects in it |
 | `make cluster-down` | Delete the dev cluster |
 
-Settings can be overridden per run, for example
-`make dev API_PORT=4100 BASIC_AUTH_PASSWORD=x CERT_DAYS=7`.
-Use `export KUBECONFIG=.dev/kubeconfig` to point `kubectl` at the dev cluster.
+Backend settings are the normal environment variables from [Configuration](#configuration) and can
+be passed to make, for example `make dev CLUSTER_NAME=prod ICECUBE_CERT_DAYS=7`. To point `kubectl`
+at the k3s cluster, run `export KUBECONFIG=$PWD/.dev/kubeconfig`.
 
 ### Configuration
 
@@ -98,7 +120,7 @@ Use `export KUBECONFIG=.dev/kubeconfig` to point `kubectl` at the dev cluster.
 | `CONTROL_PLANE_ADDRESS` | client's API URL   | Public API server URL written into kubeconfigs      |
 | `ICECUBE_CERT_DAYS`     | `365`              | Maximum certificate lifetime                        |
 | `ICECUBE_LISTEN`        | `0.0.0.0:4000`     | Listen address                                      |
-| `ICECUBE_STATIC_DIR`    | `../frontend/dist` | Built UI                                            |
+| `ICECUBE_INSTALL_CRDS`  | `true`             | Apply the CRDs on startup                           |
 
 `icecube crd` prints the CRD YAML, so you can apply it ahead of time (for example from GitOps).
 
