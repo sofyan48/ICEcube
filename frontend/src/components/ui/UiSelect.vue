@@ -31,7 +31,8 @@ const model = defineModel<T | undefined>()
       <SelectContent
         position="popper"
         :side-offset="6"
-        class="card z-50 max-h-72 w-(--reka-select-trigger-width) min-w-48 overflow-hidden !shadow-xl data-[state=open]:animate-fade-in"
+        :collision-padding="12"
+        class="card z-50 max-h-72 w-max max-w-[min(32rem,var(--reka-select-content-available-width))] min-w-(--reka-select-trigger-width) overflow-hidden !shadow-xl data-[state=open]:animate-fade-in"
       >
         <SelectViewport class="p-1">
           <SelectItem
@@ -40,8 +41,8 @@ const model = defineModel<T | undefined>()
             :value="o.value"
             class="relative flex cursor-default flex-col rounded-md py-1.5 pr-8 pl-2.5 text-sm outline-none select-none data-[highlighted]:bg-zinc-100 dark:data-[highlighted]:bg-zinc-800"
           >
-            <SelectItemText>{{ o.label }}</SelectItemText>
-            <span v-if="o.hint" class="truncate text-xs text-zinc-500">{{ o.hint }}</span>
+            <SelectItemText class="break-all">{{ o.label }}</SelectItemText>
+            <span v-if="o.hint" class="text-xs text-zinc-500">{{ o.hint }}</span>
             <SelectItemIndicator class="absolute top-2 right-2">
               <Check class="size-4 text-brand-600" />
             </SelectItemIndicator>

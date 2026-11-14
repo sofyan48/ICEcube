@@ -187,11 +187,11 @@ const scopeClass =
 <template>
   <UiDialog
     v-model:open="open"
-    width="xl"
+    size="editor"
     :title="editing ? `Edit template ${template?.name}` : 'New permission template'"
     description="A template is a ClusterRole that can be granted to users."
   >
-    <div class="grid gap-6 lg:grid-cols-[1fr_20rem]">
+    <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
       <div class="space-y-5">
         <div class="grid gap-4 sm:grid-cols-2">
           <label class="block">
@@ -235,7 +235,7 @@ const scopeClass =
                 <Trash2 />
               </UiButton>
             </div>
-            <div class="grid gap-3 sm:grid-cols-2">
+            <div class="grid gap-3 md:grid-cols-2">
               <template v-if="!rule.nonResourceURLs.length">
                 <div class="block">
                   <span class="mb-1 block text-xs text-zinc-500">API groups</span>
@@ -261,12 +261,12 @@ const scopeClass =
                     unknown-hint="Not a resource of the selected API groups"
                   />
                 </div>
-                <label class="block sm:col-span-2">
+                <label class="block md:col-span-2">
                   <span class="mb-1 block text-xs text-zinc-500">Resource names <span class="text-zinc-400">(optional, restricts to specific objects)</span></span>
                   <UiTags v-model="rule.resourceNames" mono placeholder="any" />
                 </label>
               </template>
-              <label v-if="scope === 'cluster'" class="block sm:col-span-2">
+              <label v-if="scope === 'cluster'" class="block md:col-span-2">
                 <span class="mb-1 block text-xs text-zinc-500">Non-resource URLs <span class="text-zinc-400">(replaces groups/resources)</span></span>
                 <UiTags v-model="rule.nonResourceURLs" mono placeholder="/healthz, /metrics…" />
               </label>
@@ -296,7 +296,7 @@ const scopeClass =
         </div>
       </div>
 
-      <div class="lg:sticky lg:top-0 lg:self-start">
+      <div class="xl:sticky xl:top-0 xl:self-start">
         <span class="mb-1.5 block text-xs font-medium text-zinc-600 dark:text-zinc-400">ClusterRole preview</span>
         <UiCode :code="preview" max-height="32rem" />
       </div>

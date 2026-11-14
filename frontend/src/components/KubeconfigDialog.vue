@@ -139,7 +139,7 @@ const isToken = computed(() => props.user?.credential === 'serviceAccount')
 <template>
   <UiDialog
     v-model:open="open"
-    :width="shown ? '2xl' : 'lg'"
+    :size="shown ? 'editor' : 'form'"
     :title="`${reissue ? 'Re-issue kubeconfig' : 'Kubeconfig'} for ${user?.name ?? ''}`"
     :description="isToken ? 'A ServiceAccount token; revoke it any time from the user menu.' : 'A client certificate signed by the cluster CA.'"
   >

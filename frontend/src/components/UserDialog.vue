@@ -117,7 +117,7 @@ const countClass = 'rounded-full bg-zinc-200/80 px-1.5 text-[10px] tabular-nums 
 <template>
   <UiDialog
     v-model:open="open"
-    width="xl"
+    size="editor"
     :title="editing ? `Edit ${user?.name}` : 'New user'"
     :description="editing ? 'Change what this user can access.' : 'Default groups are preselected, so the user is ready to go.'"
   >

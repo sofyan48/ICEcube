@@ -294,6 +294,13 @@ Any new Kubernetes call means you must check these rules.
     - Values that do not exist or are unsupported are highlighted amber but
       kept.
     - It falls back to free-text `UiTags` when discovery fails.
+- **Dialog sizes:** `UiDialog` has only `size="form"` (default, `max-w-2xl`)
+  and `size="editor"` (`max-w-6xl`, fixed height so tabs do not jump). Use
+  `editor` for anything with tabs, editors, previews or YAML; do not add
+  one-off widths.
+- **Dropdowns** (`UiMultiPick`, `UiSelect`) render in a portal, may grow
+  wider than their field (up to 32rem) and wrap long names instead of
+  truncating them.
 - **Primitives:** `components/ui/Ui*.vue` (UiButton, UiDialog, UiConfirm,
   UiBadge with tones `neutral|brand|amber|green|violet`, UiSelect, UiCode,
   UiTags for free text, UiMultiPick for a searchable multi-select with

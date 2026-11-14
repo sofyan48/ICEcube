@@ -69,7 +69,7 @@ async function save() {
 <template>
   <UiDialog
     v-model:open="open"
-    width="xl"
+    size="editor"
     :title="editing ? `Edit group ${group?.name}` : 'New group'"
     description="Members get every grant of the group. Changes apply to all members right away."
   >
