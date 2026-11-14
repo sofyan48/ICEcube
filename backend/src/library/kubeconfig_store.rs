@@ -15,7 +15,7 @@ use kube::{
     api::{DeleteParams, ObjectMeta, Patch, PatchParams},
 };
 
-use crate::{
+use crate::library::{
     error::{AppError, AppResult, is_not_found},
     model::*,
     state::AppState,

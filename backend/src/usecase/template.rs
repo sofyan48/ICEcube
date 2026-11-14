@@ -8,7 +8,7 @@ use kube::{
     api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams, PostParams},
 };
 
-use crate::{
+use crate::library::{
     error::{AppError, AppResult, is_not_found},
     model::*,
 };

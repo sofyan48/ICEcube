@@ -17,10 +17,13 @@ use kube::{
 };
 
 use crate::{
-    error::{AppError, AppResult, is_not_found},
-    groups,
-    model::*,
-    templates,
+    library::{
+        error::{AppError, AppResult, is_not_found},
+        kubeconfig_store,
+        model::*,
+        state::AppState,
+    },
+    usecase::{group as groups, template as templates},
 };
 
 fn user_selector(user: &str) -> String {
@@ -194,17 +197,21 @@ pub async fn update(client: &Client, name: &str, input: UpdateUserInput) -> AppR
     Ok(to_dto(&user))
 }
 
-pub async fn delete(client: &Client, name: &str) -> AppResult<()> {
+pub async fn delete(state: &AppState, name: &str) -> AppResult<()> {
+    let client = &state.client;
     let user = get_cr(client, name).await?;
     // Remove bindings explicitly so access is revoked immediately instead of
     // waiting for the garbage collector.
     apply(client, &user, &BTreeSet::new()).await?;
     let api: Api<IcecubeUser> = Api::all(client.clone());
     match api.delete(name, &DeleteParams::background()).await {
-        Ok(_) => Ok(()),
-        Err(e) if is_not_found(&e) => Ok(()),
-        Err(e) => Err(e.into()),
+        Ok(_) => {}
+        Err(e) if is_not_found(&e) => {}
+        Err(e) => return Err(e.into()),
     }
+    // Also garbage-collected through its owner reference; deleting it here
+    // removes it right away.
+    kubeconfig_store::delete(state, name).await
 }
 
 fn validate_groups(all: &[IcecubeGroup], names: &[String]) -> AppResult<Vec<String>> {

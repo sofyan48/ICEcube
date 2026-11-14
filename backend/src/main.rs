@@ -1,19 +1,12 @@
-mod api;
-mod config;
-mod error;
-mod groups;
-mod kubeconfig;
-mod model;
-mod state;
-mod store;
-mod templates;
-mod ui;
-mod users;
+mod handler;
+mod library;
+mod route;
+mod usecase;
 
 use std::time::Duration;
 
 use anyhow::Context;
-use axum::{Router, routing::get};
+
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::{
     Api, CustomResourceExt, Resource,
@@ -24,9 +17,13 @@ use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    config::Config,
-    model::{IcecubeGroup, IcecubeUser},
-    state::AppState,
+    handler::ui,
+    library::{
+        config::Config,
+        model::{self, IcecubeGroup, IcecubeUser},
+        state::AppState,
+    },
+    usecase::{group, template, user},
 };
 
 #[tokio::main]
@@ -50,20 +47,17 @@ async fn main() -> anyhow::Result<()> {
 
     ensure_crd::<IcecubeUser>(&state).await?;
     ensure_crd::<IcecubeGroup>(&state).await?;
-    templates::seed_builtins(&state.client)
+    template::seed_builtins(&state.client)
         .await
         .context("seeding builtin templates")?;
-    groups::seed_default(&state.client)
+    group::seed_default(&state.client)
         .await
         .context("seeding the default group")?;
-    users::migrate_legacy(&state.client)
+    user::migrate_legacy(&state.client)
         .await
         .context("migrating users to spec bindings")?;
 
-    let app = Router::new()
-        .route("/healthz", get(|| async { "ok" }))
-        .nest("/api", api::router(state.clone()))
-        .fallback(ui::serve)
+    let app = route::app(state.clone())
         // gzip/brotli for the UI bundle and JSON; skips tiny and already-compressed bodies.
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());

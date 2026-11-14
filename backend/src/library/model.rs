@@ -5,7 +5,7 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, AppResult};
+use crate::library::error::{AppError, AppResult};
 
 pub const MANAGER: &str = "icecube";
 pub const LABEL_MANAGED_BY: &str = "app.kubernetes.io/managed-by";

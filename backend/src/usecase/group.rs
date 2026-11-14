@@ -9,9 +9,11 @@ use kube::{
 };
 
 use crate::{
-    error::{AppError, AppResult, is_not_found},
-    model::*,
-    users,
+    library::{
+        error::{AppError, AppResult, is_not_found},
+        model::*,
+    },
+    usecase::user as users,
 };
 
 pub const DEFAULT_GROUP: &str = "default";

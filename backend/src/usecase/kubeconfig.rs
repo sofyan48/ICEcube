@@ -1,7 +1,7 @@
 //! Issue a client certificate for a user through the Kubernetes CSR API and
 //! wrap it in a kubeconfig. Certificate metadata is recorded in the user's
 //! status (expiry, re-issue settings); the kubeconfig itself is kept in a
-//! Secret by `store` unless that is disabled.
+//! Secret by `kubeconfig_store` unless that is disabled.
 
 use std::time::Duration;
 
@@ -18,11 +18,13 @@ use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use serde_json::json;
 
 use crate::{
-    error::{AppError, AppResult},
-    groups,
-    model::*,
-    state::AppState,
-    store, users,
+    library::{
+        error::{AppError, AppResult},
+        kubeconfig_store as store,
+        model::*,
+        state::AppState,
+    },
+    usecase::{group as groups, user as users},
 };
 
 const SIGNER: &str = "kubernetes.io/kube-apiserver-client";
@@ -32,6 +34,11 @@ const HISTORY: usize = 10;
 
 /// Lifetime used when nothing was issued before and none is requested.
 const DEFAULT_DAYS: u32 = 30;
+
+/// The user's last issued kubeconfig, when storage is enabled.
+pub async fn stored(state: &AppState, user: &str) -> AppResult<KubeconfigDto> {
+    store::load(state, user).await
+}
 
 /// Issue again with the settings of the most recent certificate. Users without
 /// any history (new users, or certificates issued before history existed) get

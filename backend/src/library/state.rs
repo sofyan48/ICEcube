@@ -4,7 +4,7 @@ use anyhow::Context;
 use base64::Engine;
 use kube::Client;
 
-use crate::config::Config;
+use crate::library::config::Config;
 
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);

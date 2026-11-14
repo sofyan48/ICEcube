@@ -110,7 +110,7 @@ lint: install ## Format check, clippy, type check, chart lint and CRD drift chec
 fmt: ## Format the backend code
 	@cd $(BACKEND) && cargo fmt
 
-crd: ## Regenerate the chart CRDs from backend/src/model.rs
+crd: ## Regenerate the chart CRDs from backend/src/library/model.rs
 	@cd $(BACKEND) && cargo run --quiet -- crd > ../$(CHART)/crds/icecube-crds.yaml
 	@echo "Updated $(CHART)/crds/icecube-crds.yaml"
 
