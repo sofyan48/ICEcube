@@ -60,7 +60,16 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push dist/icecube-*.tgz "$CHART_REPO"
+      # Works whether or not the release already exists: it may have been
+      # created on github.com (which also pushes the tag and starts this
+      # workflow), or by an earlier run of this job being re-run.
       - name: GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" dist/icecube-*.tgz --generate-notes --verify-tag
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME exists; uploading the chart to it."
+            gh release upload "$GITHUB_REF_NAME" dist/icecube-*.tgz --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/icecube-*.tgz --generate-notes --verify-tag
+          fi
