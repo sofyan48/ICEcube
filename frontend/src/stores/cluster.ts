@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api } from '@/lib/api'
-import type { Template, TemplateInput } from '@/lib/types'
+import type { ApiGroup, Template, TemplateInput } from '@/lib/types'
 
 /** Namespaces and permission templates, cached client-side. */
 export const useClusterStore = defineStore('cluster', () => {
@@ -9,6 +9,23 @@ export const useClusterStore = defineStore('cluster', () => {
   const templates = ref<Template[]>([])
   const loading = ref(false)
   const loaded = ref(false)
+  /** API groups and resources the cluster serves; null until loaded or when discovery failed. */
+  const apiGroups = ref<ApiGroup[] | null>(null)
+  let discovering: Promise<void> | null = null
+
+  /** Loaded on demand by the template editor; failures leave it null so the editor falls back to free text. */
+  function loadDiscovery(force = false): Promise<void> {
+    if (apiGroups.value && !force) return Promise.resolve()
+    discovering ??= api
+      .get<ApiGroup[]>('/discovery')
+      .then((g) => {
+        apiGroups.value = g
+      })
+      .finally(() => {
+        discovering = null
+      })
+    return discovering
+  }
 
   const templatesByName = computed(() => new Map(templates.value.map((t) => [t.name, t])))
   const namespacedTemplates = computed(() => templates.value.filter((t) => t.scope === 'namespaced'))
@@ -56,6 +73,7 @@ export const useClusterStore = defineStore('cluster', () => {
   function reset() {
     namespaces.value = []
     templates.value = []
+    apiGroups.value = null
     loaded.value = false
   }
 
@@ -67,6 +85,8 @@ export const useClusterStore = defineStore('cluster', () => {
     namespacedTemplates,
     clusterTemplates,
     load,
+    apiGroups,
+    loadDiscovery,
     createTemplate,
     updateTemplate,
     deleteTemplate,

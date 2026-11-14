@@ -13,6 +13,13 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.credential
+      name: Credential
+      type: string
+    - jsonPath: .status.blocked
+      name: Blocked
+      priority: 1
+      type: string
     - jsonPath: .spec.description
       name: Description
       type: string
@@ -49,6 +56,15 @@ spec:
                   type: object
                 nullable: true
                 type: array
+              credential:
+                default: certificate
+                description: |-
+                  How the user authenticates. Client certificates cannot be revoked;
+                  ServiceAccount tokens die as soon as the ServiceAccount is replaced.
+                enum:
+                - certificate
+                - serviceAccount
+                type: string
               description:
                 nullable: true
                 type: string
@@ -64,6 +80,10 @@ spec:
               bookkeeping never overwrite each other.
             nullable: true
             properties:
+              blocked:
+                description: Why the controller refuses to bind this user (set while blocked).
+                nullable: true
+                type: string
               certificates:
                 default: []
                 description: "Most recent last. Only metadata: private keys are never stored."
@@ -77,6 +97,13 @@ spec:
                       type: string
                     issuedAt:
                       type: string
+                    kind:
+                      default: certificate
+                      description: Certificate or ServiceAccount token.
+                      enum:
+                      - certificate
+                      - serviceAccount
+                      type: string
                     namespace:
                       description: Default namespace written into that kubeconfig.
                       type: string
@@ -85,6 +112,10 @@ spec:
                       format: uint32
                       minimum: 0.0
                       type: integer
+                    revokedAt:
+                      description: Set when the credential was revoked before it expired (tokens only).
+                      nullable: true
+                      type: string
                     serial:
                       type: string
                   required:
@@ -95,6 +126,12 @@ spec:
                   - serial
                   type: object
                 type: array
+              certificatesValidUntil:
+                description: |-
+                  Latest expiry of any client certificate ever issued to this name,
+                  including ones that dropped out of the history. RFC 3339.
+                nullable: true
+                type: string
             type: object
         required:
         - spec

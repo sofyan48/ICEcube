@@ -6,8 +6,9 @@ clusterName: kubernetes
 # the internal service address, which users cannot reach.
 controlPlaneAddress: ""
 
-# -- Longest lifetime (days) a kubeconfig certificate may be issued for.
-maxCertDays: 365
+# -- Longest lifetime (days) a kubeconfig certificate or token may be issued
+# for. Certificates cannot be revoked, so keep this short.
+maxCertDays: 30
 
 # -- Keep each user's latest kubeconfig (one Secret per user in this release's
 # namespace) so it can be viewed and downloaded again later. When false, a
@@ -43,9 +44,12 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# -- Keep at 1: the backend is not designed to run active/active
-# (concurrent reconciles of the same user could race).
+# -- Every replica serves the UI/API; only the leader (Lease
+# `icecube-controller`) runs the controller, so more than one is safe.
 replicaCount: 1
+
+# -- Elect one controller among the replicas. Only turn off with a single replica.
+leaderElection: true
 
 serviceAccount:
   create: true

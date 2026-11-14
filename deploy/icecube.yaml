@@ -40,7 +40,7 @@ rules:
     verbs: [get, update, patch]
   - apiGroups: [""]
     resources: [namespaces]
-    verbs: [get, list]
+    verbs: [get, list, watch]
   # Templates are ClusterRoles. `escalate` lets ICEcube create roles with
   # permissions it does not hold itself; `bind` lets it grant them.
   - apiGroups: [rbac.authorization.k8s.io]
@@ -74,26 +74,42 @@ subjects:
     name: icecube
     namespace: icecube
 ---
-# Stored kubeconfigs: Secrets in this namespace only.
+# Objects ICEcube keeps in its own namespace only.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: icecube-kubeconfigs
+  name: icecube-local
   namespace: icecube
 rules:
+  # Stored kubeconfigs.
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, patch, update, delete]
+  # ServiceAccounts of token-based users, and their tokens.
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [""]
+    resources: [serviceaccounts/token]
+    verbs: [create]
+  # Deleted usernames blocked until their certificates expire.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, patch, update]
+  # Leader election.
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: icecube-kubeconfigs
+  name: icecube-local
   namespace: icecube
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: icecube-kubeconfigs
+  name: icecube-local
 subjects:
   - kind: ServiceAccount
     name: icecube
@@ -129,6 +145,8 @@ spec:
             - { name: CONTROL_PLANE_ADDRESS, value: "https://k8s.example.com:6443" }
             - name: ICECUBE_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
           envFrom:
             - secretRef: { name: icecube-auth }
           readinessProbe:

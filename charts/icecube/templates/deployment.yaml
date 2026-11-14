@@ -10,9 +10,11 @@ metadata:
     {{- include "icecube.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  # Never run two pods at once (see replicaCount in values.yaml).
+  {{- if not .Values.leaderElection }}
+  # Without leader election two pods must never run at once.
   strategy:
     type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "icecube.selectorLabels" . | nindent 6 }}
@@ -54,6 +56,12 @@ spec:
               value: {{ .Values.controlPlaneAddress | quote }}
             - name: ICECUBE_CERT_DAYS
               value: {{ .Values.maxCertDays | quote }}
+            - name: ICECUBE_LEADER_ELECTION
+              value: {{ .Values.leaderElection | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: ICECUBE_INSTALL_CRDS
               value: {{ .Values.crds.manageOnStartup | quote }}
             - name: ICECUBE_STORE_KUBECONFIGS

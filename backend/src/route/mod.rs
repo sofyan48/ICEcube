@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::{
-    handler::{auth, group, kubeconfig, namespace, session, template, ui, user},
+    handler::{auth, discovery, group, kubeconfig, namespace, session, template, ui, user},
     library::state::AppState,
 };
 
@@ -22,6 +22,7 @@ pub fn api(state: AppState) -> Router {
     Router::new()
         .route("/session", get(session::get))
         .route("/namespaces", get(namespace::list))
+        .route("/discovery", get(discovery::list))
         .route("/templates", get(template::list).post(template::create))
         .route(
             "/templates/{name}",
@@ -40,6 +41,7 @@ pub fn api(state: AppState) -> Router {
             "/users/{name}/kubeconfig",
             get(kubeconfig::get).post(kubeconfig::issue),
         )
+        .route("/users/{name}/revoke", post(user::revoke))
         .route(
             "/users/{name}/kubeconfig/reissue",
             post(kubeconfig::reissue),

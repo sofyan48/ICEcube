@@ -4,5 +4,7 @@
 pub mod config;
 pub mod error;
 pub mod kubeconfig_store;
+pub mod leader;
 pub mod model;
 pub mod state;
+pub mod tombstone;

@@ -1,6 +1,6 @@
 import type { IssuedCertificate, User } from './types'
 
-export type CertState = 'none' | 'valid' | 'expiring' | 'expired'
+export type CertState = 'none' | 'valid' | 'expiring' | 'expired' | 'revoked'
 
 const DAY = 86_400_000
 
@@ -10,6 +10,7 @@ const DAY = 86_400_000
  */
 export function certState(cert: IssuedCertificate | undefined, now = Date.now()): CertState {
   if (!cert) return 'none'
+  if (cert.revokedAt) return 'revoked'
   const issued = Date.parse(cert.issuedAt)
   const expires = Date.parse(cert.expiresAt)
   if (expires <= now) return 'expired'

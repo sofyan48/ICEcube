@@ -2,12 +2,14 @@
 //!
 //! The user's spec is the source of truth. The bindings that exist in the
 //! cluster are always derived from it: direct `bindings` plus the bindings of
-//! every group in `groups`. `reconcile` makes the cluster match.
+//! every group in `groups`. The API only writes the IcecubeUser; the controller
+//! (`usecase::controller`) calls `reconcile` to make the cluster match, so
+//! users applied with kubectl/GitOps behave exactly like ones made in the UI.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use k8s_openapi::api::{
-    core::v1::Namespace,
+    core::v1::{Namespace, ServiceAccount},
     rbac::v1::{ClusterRoleBinding, RoleBinding, RoleRef, Subject},
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
@@ -22,6 +24,7 @@ use crate::{
         kubeconfig_store,
         model::*,
         state::AppState,
+        tombstone,
     },
     usecase::{group as groups, template as templates},
 };
@@ -38,12 +41,29 @@ fn binding_labels(user: &str, template: &str) -> BTreeMap<String, String> {
     ])
 }
 
-fn subject(user: &str) -> Subject {
-    Subject {
-        kind: "User".into(),
-        name: user.into(),
-        api_group: Some(RBAC_GROUP.into()),
-        namespace: None,
+fn user_labels(user: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (LABEL_MANAGED_BY.to_string(), MANAGER.to_string()),
+        (LABEL_USER.to_string(), user.to_string()),
+    ])
+}
+
+/// Who the bindings grant access to, depending on the user's credential kind.
+fn subject(state: &AppState, user: &IcecubeUser) -> Subject {
+    let name = user.name_any();
+    match user.spec.credential {
+        CredentialKind::Certificate => Subject {
+            kind: "User".into(),
+            name,
+            api_group: Some(RBAC_GROUP.into()),
+            namespace: None,
+        },
+        CredentialKind::ServiceAccount => Subject {
+            kind: "ServiceAccount".into(),
+            name: service_account_name(&name),
+            api_group: None,
+            namespace: Some(state.namespace.clone()),
+        },
     }
 }
 
@@ -108,11 +128,13 @@ fn to_dto(user: &IcecubeUser) -> UserDto {
             .map(|t| t.0.to_string()),
         bindings,
         groups: user.spec.groups.clone(),
+        credential: user.spec.credential,
         certificates: user
             .status
             .iter()
             .flat_map(|s| s.certificates.iter().rev().cloned())
             .collect(),
+        blocked: user.status.as_ref().and_then(|s| s.blocked.clone()),
     }
 }
 
@@ -138,8 +160,21 @@ pub async fn get(client: &Client, name: &str) -> AppResult<UserDto> {
     Ok(to_dto(&get_cr(client, name).await?))
 }
 
-pub async fn create(client: &Client, input: CreateUserInput) -> AppResult<UserDto> {
+pub async fn create(state: &AppState, input: CreateUserInput) -> AppResult<UserDto> {
+    let client = &state.client;
     validate_name("user", &input.name)?;
+    let credential = input.credential.unwrap_or_default();
+    // Old certificates only match `User` subjects, so ServiceAccount users are safe.
+    if credential == CredentialKind::Certificate
+        && !input.allow_name_reuse
+        && let Some(until) = tombstone::active(state, &input.name).await?
+    {
+        return Err(AppError::Conflict(format!(
+            "username '{}' was deleted recently and certificates issued to it stay valid until {until}; \
+             pick another name or wait until then",
+            input.name
+        )));
+    }
     let bindings = validate_bindings(client, &input.bindings).await?;
     let all_groups = groups::list_crs(client).await?;
     let group_names = match input.groups {
@@ -158,9 +193,16 @@ pub async fn create(client: &Client, input: CreateUserInput) -> AppResult<UserDt
             description: input.description.filter(|d| !d.trim().is_empty()),
             bindings: Some(bindings.into_iter().collect()),
             groups: group_names,
+            credential,
         },
     );
     cr.metadata.labels = Some(BTreeMap::from([(LABEL_MANAGED_BY.into(), MANAGER.into())]));
+    if input.allow_name_reuse {
+        cr.metadata.annotations = Some(BTreeMap::from([(
+            ANNO_ALLOW_NAME_REUSE.into(),
+            "true".into(),
+        )]));
+    }
     let created = api
         .create(&PostParams::default(), &cr)
         .await
@@ -170,8 +212,7 @@ pub async fn create(client: &Client, input: CreateUserInput) -> AppResult<UserDt
             }
             e => e.into(),
         })?;
-
-    reconcile(client, &created, &all_groups).await?;
+    // The controller creates the bindings (and ServiceAccount) within moments.
     Ok(to_dto(&created))
 }
 
@@ -182,36 +223,140 @@ pub async fn update(client: &Client, name: &str, input: UpdateUserInput) -> AppR
     let group_names = validate_groups(&all_groups, &input.groups)?;
 
     let api: Api<IcecubeUser> = Api::all(client.clone());
-    let patch = serde_json::json!({
-        "spec": {
-            "description": input.description.filter(|d| !d.trim().is_empty()),
-            "bindings": bindings,
-            "groups": group_names,
-        }
+    let mut spec = serde_json::json!({
+        "description": input.description.filter(|d| !d.trim().is_empty()),
+        "bindings": bindings,
+        "groups": group_names,
     });
+    if let Some(kind) = input.credential {
+        spec["credential"] = serde_json::json!(kind);
+    }
     let user = api
-        .patch(name, &PatchParams::default(), &Patch::Merge(patch))
+        .patch(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(serde_json::json!({ "spec": spec })),
+        )
         .await?;
-
-    reconcile(client, &user, &all_groups).await?;
     Ok(to_dto(&user))
 }
 
+/// Deletes the IcecubeUser. The controller's finalizer revokes the bindings,
+/// removes the ServiceAccount and stored kubeconfig, and remembers the name
+/// while certificates issued to it are still valid.
 pub async fn delete(state: &AppState, name: &str) -> AppResult<()> {
-    let client = &state.client;
-    let user = get_cr(client, name).await?;
-    // Remove bindings explicitly so access is revoked immediately instead of
-    // waiting for the garbage collector.
-    apply(client, &user, &BTreeSet::new()).await?;
-    let api: Api<IcecubeUser> = Api::all(client.clone());
+    get_cr(&state.client, name).await?;
+    let api: Api<IcecubeUser> = Api::all(state.client.clone());
     match api.delete(name, &DeleteParams::background()).await {
-        Ok(_) => {}
-        Err(e) if is_not_found(&e) => {}
-        Err(e) => return Err(e.into()),
+        Ok(_) => Ok(()),
+        Err(e) if is_not_found(&e) => Ok(()),
+        Err(e) => Err(e.into()),
     }
-    // Also garbage-collected through its owner reference; deleting it here
-    // removes it right away.
-    kubeconfig_store::delete(state, name).await
+}
+
+/// Invalidate every token issued to a ServiceAccount user right away by
+/// deleting its ServiceAccount (bound tokens carry the ServiceAccount's UID).
+/// The controller recreates the ServiceAccount with a new UID.
+pub async fn revoke(state: &AppState, name: &str) -> AppResult<UserDto> {
+    let user = get_cr(&state.client, name).await?;
+    if user.spec.credential != CredentialKind::ServiceAccount {
+        return Err(AppError::BadRequest(format!(
+            "user '{name}' uses client certificates, which Kubernetes cannot revoke; \
+             switch the user to ServiceAccount credentials (old certificates then lose all access) or delete the user"
+        )));
+    }
+    delete_service_account(state, name).await?;
+    if let Err(e) = kubeconfig_store::delete(state, name).await {
+        tracing::warn!(user = name, error = %e, "could not remove stored kubeconfig");
+    }
+
+    let api: Api<IcecubeUser> = Api::all(state.client.clone());
+    let current = api.get_status(name).await?;
+    let now = jiff::Timestamp::now();
+    let stamp = now
+        .round(jiff::Unit::Second)
+        .map_err(AppError::internal)?
+        .to_string();
+    let mut certificates = current.status.map(|s| s.certificates).unwrap_or_default();
+    for c in &mut certificates {
+        let live = c
+            .expires_at
+            .parse::<jiff::Timestamp>()
+            .is_ok_and(|t| t > now);
+        if c.kind == CredentialKind::ServiceAccount && live && c.revoked_at.is_none() {
+            c.revoked_at = Some(stamp.clone());
+        }
+    }
+    let updated = api
+        .patch_status(
+            name,
+            &PatchParams::default(),
+            &Patch::Merge(serde_json::json!({ "status": { "certificates": certificates } })),
+        )
+        .await?;
+    tracing::info!(user = name, "service account tokens revoked");
+    Ok(to_dto(&updated))
+}
+
+/// Latest expiry of any client certificate issued to this user.
+pub fn cert_valid_until(user: &IcecubeUser) -> Option<jiff::Timestamp> {
+    let status = user.status.as_ref()?;
+    status
+        .certificates
+        .iter()
+        .filter(|c| c.kind == CredentialKind::Certificate)
+        .map(|c| c.expires_at.as_str())
+        .chain(status.certificates_valid_until.as_deref())
+        .filter_map(|s| s.parse::<jiff::Timestamp>().ok())
+        .max()
+}
+
+/// Create or update the ServiceAccount of a token-based user.
+pub async fn ensure_service_account(state: &AppState, user: &IcecubeUser) -> AppResult<()> {
+    let name = user.name_any();
+    let sa_name = service_account_name(&name);
+    let sa = ServiceAccount {
+        metadata: ObjectMeta {
+            name: Some(sa_name.clone()),
+            namespace: Some(state.namespace.clone()),
+            labels: Some(user_labels(&name)),
+            owner_references: owner(user).map(|o| vec![o]),
+            ..Default::default()
+        },
+        // Only tokens minted through ICEcube; never mounted into pods.
+        automount_service_account_token: Some(false),
+        ..Default::default()
+    };
+    let api: Api<ServiceAccount> = Api::namespaced(state.client.clone(), &state.namespace);
+    api.patch(
+        &sa_name,
+        &PatchParams::apply(MANAGER).force(),
+        &Patch::Apply(&sa),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Remove the user's ServiceAccount, invalidating all of its tokens. Missing is fine.
+pub async fn delete_service_account(state: &AppState, user: &str) -> AppResult<()> {
+    let api: Api<ServiceAccount> = Api::namespaced(state.client.clone(), &state.namespace);
+    match api
+        .delete(&service_account_name(user), &DeleteParams::default())
+        .await
+    {
+        Ok(_) => {
+            tracing::info!(user, "service account removed");
+            Ok(())
+        }
+        Err(e) if is_not_found(&e) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Take away everything the user can access: bindings and ServiceAccount.
+pub async fn revoke_all(state: &AppState, user: &IcecubeUser) -> AppResult<()> {
+    apply(state, user, &BTreeSet::new()).await?;
+    delete_service_account(state, &user.name_any()).await
 }
 
 fn validate_groups(all: &[IcecubeGroup], names: &[String]) -> AppResult<Vec<String>> {
@@ -291,41 +436,46 @@ pub fn effective_bindings(user: &IcecubeUser, groups: &[IcecubeGroup]) -> BTreeS
 
 /// Recompute the user's effective bindings and apply them to the cluster.
 pub async fn reconcile(
-    client: &Client,
+    state: &AppState,
     user: &IcecubeUser,
     groups: &[IcecubeGroup],
 ) -> AppResult<()> {
-    apply(client, user, &effective_bindings(user, groups)).await
+    apply(state, user, &effective_bindings(user, groups)).await
 }
 
 /// Make the user's bindings in the cluster match `desired` exactly.
+///
+/// Every desired binding is server-side applied, not only missing ones, so
+/// manual edits (e.g. changed subjects) are reverted too. Applying an
+/// unchanged object is a no-op and does not emit a watch event.
 async fn apply(
-    client: &Client,
+    state: &AppState,
     user: &IcecubeUser,
     desired: &BTreeSet<BindingDto>,
 ) -> AppResult<()> {
+    let client = &state.client;
     let name = user.name_any();
     let current = applied_bindings(client, &user_selector(&name))
         .await?
         .remove(&name)
         .unwrap_or_default();
     let owner = owner(user);
+    let subject = subject(state, user);
     let pp = PatchParams::apply(MANAGER).force();
 
-    let missing: Vec<_> = desired.difference(&current).collect();
     // A group can still reference a namespace that was deleted later; skip it
     // instead of failing the whole user.
-    let namespaces = if missing.iter().any(|b| b.namespace.is_some()) {
+    let namespaces = if desired.iter().any(|b| b.namespace.is_some()) {
         namespace_set(client).await?
     } else {
         BTreeSet::new()
     };
 
-    for b in missing {
+    for b in desired {
         if let Some(ns) = &b.namespace
             && !namespaces.contains(ns)
         {
-            tracing::warn!(user = %name, template = %b.template, namespace = %ns, "namespace missing, binding skipped");
+            tracing::debug!(user = %name, template = %b.template, namespace = %ns, "namespace missing, binding skipped");
             continue;
         }
         let meta = ObjectMeta {
@@ -341,7 +491,7 @@ async fn apply(
                 let rb = RoleBinding {
                     metadata: meta,
                     role_ref: role_ref(&b.template),
-                    subjects: Some(vec![subject(&name)]),
+                    subjects: Some(vec![subject.clone()]),
                 };
                 api.patch(&binding_name(&name, &b.template), &pp, &Patch::Apply(rb))
                     .await?;
@@ -351,13 +501,15 @@ async fn apply(
                 let crb = ClusterRoleBinding {
                     metadata: meta,
                     role_ref: role_ref(&b.template),
-                    subjects: Some(vec![subject(&name)]),
+                    subjects: Some(vec![subject.clone()]),
                 };
                 api.patch(&binding_name(&name, &b.template), &pp, &Patch::Apply(crb))
                     .await?;
             }
         }
-        tracing::info!(user = %name, template = %b.template, namespace = ?b.namespace, "binding created");
+        if !current.contains(b) {
+            tracing::info!(user = %name, template = %b.template, namespace = ?b.namespace, "binding created");
+        }
     }
 
     for b in current.difference(desired) {
@@ -448,6 +600,45 @@ mod tests {
         )
     }
 
+    fn issued(kind: CredentialKind, expires_at: &str) -> IssuedCertificate {
+        IssuedCertificate {
+            serial: expires_at.into(),
+            issued_at: "2026-01-01T00:00:00Z".into(),
+            expires_at: expires_at.into(),
+            namespace: "default".into(),
+            requested_days: 30,
+            kind,
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn cert_valid_until_ignores_tokens_and_keeps_pruned_expiry() {
+        let mut user = IcecubeUser::new(
+            "jane",
+            IcecubeUserSpec {
+                description: None,
+                bindings: Some(vec![]),
+                groups: vec![],
+                credential: CredentialKind::Certificate,
+            },
+        );
+        assert_eq!(cert_valid_until(&user), None);
+
+        user.status = Some(IcecubeUserStatus {
+            certificates: vec![
+                issued(CredentialKind::Certificate, "2026-02-01T00:00:00Z"),
+                issued(CredentialKind::ServiceAccount, "2027-01-01T00:00:00Z"),
+            ],
+            certificates_valid_until: Some("2026-03-01T00:00:00Z".into()),
+            blocked: None,
+        });
+        assert_eq!(
+            cert_valid_until(&user).map(|t| t.to_string()),
+            Some("2026-03-01T00:00:00Z".into())
+        );
+    }
+
     #[test]
     fn effective_bindings_merge_direct_and_groups() {
         let user = IcecubeUser::new(
@@ -456,6 +647,7 @@ mod tests {
                 description: None,
                 bindings: Some(vec![b("developer", Some("team-a")), b("viewer", None)]),
                 groups: vec!["base".into(), "deleted".into()],
+                credential: CredentialKind::Certificate,
             },
         );
         let groups = vec![

@@ -82,7 +82,7 @@ What each setting means:
 | --- | --- | --- |
 | `controlPlaneAddress` | **Required** | Your cluster's address from step 1. Install fails without it. |
 | `clusterName` | Recommended | A short name for the cluster, like `production` or `staging`. Default: `kubernetes`. |
-| `maxCertDays` | Recommended | Maximum kubeconfig lifetime in days. Default: `365`; `7`–`30` is safer. |
+| `maxCertDays` | Recommended | Maximum kubeconfig lifetime in days (certificates and tokens). Default: `30`. |
 | `auth.username` | Optional | Sign-in name. Default: `admin`. |
 | `auth.password` | Optional | Sign-in password. Leave empty to generate one. |
 | `ingress` | Optional | Only if you want ICEcube on a domain. Set `enabled: true`, your domain in both `hosts` and `tls`, and your controller in `className`. |

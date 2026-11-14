@@ -25,10 +25,7 @@ pub async fn create(
     State(s): State<AppState>,
     Json(input): Json<CreateUserInput>,
 ) -> AppResult<(StatusCode, Json<UserDto>)> {
-    Ok((
-        StatusCode::CREATED,
-        Json(user::create(&s.client, input).await?),
-    ))
+    Ok((StatusCode::CREATED, Json(user::create(&s, input).await?)))
 }
 
 pub async fn update(
@@ -37,6 +34,13 @@ pub async fn update(
     Json(input): Json<UpdateUserInput>,
 ) -> AppResult<Json<UserDto>> {
     Ok(Json(user::update(&s.client, &name, input).await?))
+}
+
+pub async fn revoke(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> AppResult<Json<UserDto>> {
+    Ok(Json(user::revoke(&s, &name).await?))
 }
 
 pub async fn delete(State(s): State<AppState>, Path(name): Path<String>) -> AppResult<StatusCode> {

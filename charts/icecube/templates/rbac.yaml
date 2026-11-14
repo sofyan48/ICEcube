@@ -18,9 +18,10 @@ rules:
   - apiGroups: [icecube.io]
     resources: [icecubeusers/status]
     verbs: [get, update, patch]
+  # The controller watches namespaces so bindings appear once their namespace exists.
   - apiGroups: [""]
     resources: [namespaces]
-    verbs: [get, list]
+    verbs: [get, list, watch]
   # Templates are ClusterRoles. `escalate` lets ICEcube create roles with
   # permissions it does not hold itself; `bind` lets it grant them.
   - apiGroups: [rbac.authorization.k8s.io]
@@ -55,35 +56,51 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "icecube.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
-{{- if .Values.storeKubeconfigs }}
 ---
-# Stored kubeconfigs: Secrets in ICEcube's own namespace only.
+# Objects ICEcube keeps in its own namespace only.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "icecube.fullname" . }}-kubeconfigs
+  name: {{ include "icecube.fullname" . }}-local
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "icecube.labels" . | nindent 4 }}
 rules:
+  {{- if .Values.storeKubeconfigs }}
+  # Stored kubeconfigs.
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, patch, update, delete]
+  {{- end }}
+  # ServiceAccounts of token-based users, and their tokens.
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [""]
+    resources: [serviceaccounts/token]
+    verbs: [create]
+  # Deleted usernames blocked until their certificates expire.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, patch, update]
+  # Leader election.
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "icecube.fullname" . }}-kubeconfigs
+  name: {{ include "icecube.fullname" . }}-local
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "icecube.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "icecube.fullname" . }}-kubeconfigs
+  name: {{ include "icecube.fullname" . }}-local
 subjects:
   - kind: ServiceAccount
     name: {{ include "icecube.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
-{{- end }}
 {{- end }}

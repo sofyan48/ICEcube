@@ -11,7 +11,11 @@ pub struct Config {
     pub control_plane_address: Option<String>,
     pub auth_user: String,
     pub auth_password: String,
+    /// Longest lifetime of an issued certificate or token, in days.
     pub cert_days: u32,
+    /// Run the controller with Lease-based leader election, so several
+    /// replicas can run. Off: this process always runs the controller.
+    pub leader_election: bool,
     /// Install/upgrade the CRDs on startup. Turn off when they are managed
     /// elsewhere (Helm `crds/`, GitOps); the backend then only waits for them.
     pub install_crds: bool,
@@ -34,7 +38,7 @@ impl Config {
             bail!("BASIC_AUTH_PASSWORD must be set");
         }
 
-        let cert_days = env_or("ICECUBE_CERT_DAYS", "365")
+        let cert_days = env_or("ICECUBE_CERT_DAYS", "30")
             .parse()
             .context("ICECUBE_CERT_DAYS must be a number")?;
 
@@ -47,6 +51,7 @@ impl Config {
             auth_user: env_or("BASIC_AUTH_USER", "admin"),
             auth_password,
             cert_days,
+            leader_election: env_bool("ICECUBE_LEADER_ELECTION", true),
             install_crds: env_bool("ICECUBE_INSTALL_CRDS", true),
             store_kubeconfigs: env_bool("ICECUBE_STORE_KUBECONFIGS", true),
             namespace: std::env::var("ICECUBE_NAMESPACE")

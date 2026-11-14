@@ -1,5 +1,5 @@
 //! Groups (IcecubeGroup CRs): named sets of bindings that users join.
-//! Changing a group re-applies the bindings of every member.
+//! The controller watches groups and re-applies the bindings of every member.
 
 use std::collections::BTreeMap;
 
@@ -92,7 +92,6 @@ pub async fn update(client: &Client, name: &str, input: GroupInput) -> AppResult
     let updated = api
         .patch(name, &PatchParams::default(), &Patch::Merge(patch))
         .await?;
-    reconcile_all_users(client).await?;
     Ok(to_dto(&updated))
 }
 
@@ -116,22 +115,10 @@ pub async fn delete(client: &Client, name: &str) -> AppResult<()> {
 
     let api: Api<IcecubeGroup> = Api::all(client.clone());
     match api.delete(name, &DeleteParams::default()).await {
-        Ok(_) => {}
-        Err(e) if is_not_found(&e) => {}
-        Err(e) => return Err(e.into()),
+        Ok(_) => Ok(()),
+        Err(e) if is_not_found(&e) => Ok(()),
+        Err(e) => Err(e.into()),
     }
-    reconcile_all_users(client).await
-}
-
-/// Re-apply every user's bindings after a group changed. Bindings carry no
-/// record of which group granted them, so reconciling everyone is the simple,
-/// correct option; it only touches bindings that actually differ.
-async fn reconcile_all_users(client: &Client) -> AppResult<()> {
-    let groups = list_crs(client).await?;
-    for user in users::list_crs(client).await? {
-        users::reconcile(client, &user, &groups).await?;
-    }
-    Ok(())
 }
 
 /// On first install, create the "default" group that every new user joins.

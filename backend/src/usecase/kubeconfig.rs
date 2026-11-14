@@ -1,16 +1,21 @@
-//! Issue a client certificate for a user through the Kubernetes CSR API and
-//! wrap it in a kubeconfig. Certificate metadata is recorded in the user's
-//! status (expiry, re-issue settings); the kubeconfig itself is kept in a
-//! Secret by `kubeconfig_store` unless that is disabled.
+//! Issue a credential for a user and wrap it in a kubeconfig: a client
+//! certificate through the CSR API, or a ServiceAccount token through the
+//! TokenRequest API, depending on the user's `credential`. Metadata is
+//! recorded in the user's status (expiry, re-issue settings); the kubeconfig
+//! itself is kept in a Secret by `kubeconfig_store` unless that is disabled.
 
 use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use k8s_openapi::{
     ByteString,
-    api::certificates::v1::{
-        CertificateSigningRequest, CertificateSigningRequestCondition,
-        CertificateSigningRequestSpec,
+    api::{
+        authentication::v1::{TokenRequest, TokenRequestSpec},
+        certificates::v1::{
+            CertificateSigningRequest, CertificateSigningRequestCondition,
+            CertificateSigningRequestSpec,
+        },
+        core::v1::ServiceAccount,
     },
 };
 use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams, PostParams};
@@ -66,6 +71,11 @@ pub async fn issue(
     input: KubeconfigInput,
 ) -> AppResult<KubeconfigDto> {
     let cr = users::get_cr(&state.client, user).await?;
+    if let Some(reason) = cr.status.as_ref().and_then(|s| s.blocked.as_deref()) {
+        return Err(AppError::Conflict(format!(
+            "user '{user}' is blocked: {reason}"
+        )));
+    }
     let effective = users::effective_bindings(&cr, &groups::list_crs(&state.client).await?);
     if effective.is_empty() {
         return Err(AppError::BadRequest(format!(
@@ -89,17 +99,10 @@ pub async fn issue(
         .unwrap_or_else(|| "default".to_string());
     validate_name("namespace", &namespace)?;
 
-    let key = KeyPair::generate().map_err(AppError::internal)?;
-    let mut params = CertificateParams::new(Vec::<String>::new()).map_err(AppError::internal)?;
-    let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, user);
-    params.distinguished_name = dn;
-    let csr_pem = params
-        .serialize_request(&key)
-        .and_then(|c| c.pem())
-        .map_err(AppError::internal)?;
-
-    let cert_pem = sign(state, user, csr_pem.into_bytes(), days).await?;
+    let (auth, certificate) = match cr.spec.credential {
+        CredentialKind::Certificate => issue_certificate(state, user, &namespace, days).await?,
+        CredentialKind::ServiceAccount => issue_token(state, user, &namespace, days).await?,
+    };
 
     let cluster = state.config.cluster_name.clone();
     let context = format!("{user}@{cluster}");
@@ -112,13 +115,7 @@ pub async fn issue(
         "apiVersion": "v1",
         "kind": "Config",
         "clusters": [{ "name": cluster, "cluster": cluster_entry }],
-        "users": [{
-            "name": user,
-            "user": {
-                "client-certificate-data": B64.encode(&cert_pem),
-                "client-key-data": B64.encode(key.serialize_pem()),
-            }
-        }],
+        "users": [{ "name": user, "user": auth }],
         "contexts": [{
             "name": context,
             "context": { "cluster": cluster, "user": user, "namespace": namespace }
@@ -127,19 +124,108 @@ pub async fn issue(
     });
 
     let yaml = serde_saphyr::to_string(&kubeconfig).map_err(AppError::internal)?;
-    let certificate = describe(&cert_pem, namespace, days)?;
     record(state, user, &certificate).await?;
     let issued = KubeconfigDto {
         kubeconfig: yaml,
         certificate,
     };
-    // The certificate is already valid; failing to keep a copy must not hide
+    // The credential is already valid; failing to keep a copy must not hide
     // it from the admin who just asked for it.
     if let Err(e) = store::save(state, &cr, &issued).await {
         tracing::warn!(user, error = %e, "could not store kubeconfig");
     }
-    tracing::info!(user, days, serial = %issued.certificate.serial, expires_at = %issued.certificate.expires_at, "kubeconfig issued");
+    tracing::info!(user, days, kind = ?issued.certificate.kind, serial = %issued.certificate.serial, expires_at = %issued.certificate.expires_at, "kubeconfig issued");
     Ok(issued)
+}
+
+/// Client certificate through the CSR API. Returns the kubeconfig `user` entry.
+async fn issue_certificate(
+    state: &AppState,
+    user: &str,
+    namespace: &str,
+    days: u32,
+) -> AppResult<(serde_json::Value, IssuedCertificate)> {
+    let key = KeyPair::generate().map_err(AppError::internal)?;
+    let mut params = CertificateParams::new(Vec::<String>::new()).map_err(AppError::internal)?;
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, user);
+    params.distinguished_name = dn;
+    let csr_pem = params
+        .serialize_request(&key)
+        .and_then(|c| c.pem())
+        .map_err(AppError::internal)?;
+
+    let cert_pem = sign(state, user, csr_pem.into_bytes(), days).await?;
+    let certificate = describe(&cert_pem, namespace.to_string(), days)?;
+    let auth = json!({
+        "client-certificate-data": B64.encode(&cert_pem),
+        "client-key-data": B64.encode(key.serialize_pem()),
+    });
+    Ok((auth, certificate))
+}
+
+/// Bound token of the user's ServiceAccount through the TokenRequest API.
+/// Deleting the ServiceAccount (revoke) invalidates it immediately.
+async fn issue_token(
+    state: &AppState,
+    user: &str,
+    namespace: &str,
+    days: u32,
+) -> AppResult<(serde_json::Value, IssuedCertificate)> {
+    let api: Api<ServiceAccount> = Api::namespaced(state.client.clone(), &state.namespace);
+    let sa = service_account_name(user);
+    // The controller creates it; wait briefly right after a user was created
+    // or revoked.
+    let mut found = false;
+    for _ in 0..20 {
+        if api.get_opt(&sa).await?.is_some() {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    if !found {
+        return Err(AppError::Conflict(format!(
+            "ServiceAccount {}/{sa} does not exist yet; is the ICEcube controller running?",
+            state.namespace
+        )));
+    }
+
+    let request = TokenRequest {
+        metadata: Default::default(),
+        // No audiences: the API server's own are used.
+        spec: Some(TokenRequestSpec {
+            expiration_seconds: Some(i64::from(days) * 86_400),
+            ..Default::default()
+        }),
+        status: None,
+    };
+    let response = api
+        .create_token_request(&sa, &PostParams::default(), &request)
+        .await?;
+    let status = response.status.unwrap_or_default();
+    let (Some(token), Some(expires)) = (status.token, status.expiration_timestamp) else {
+        return Err(AppError::internal("TokenRequest returned no token"));
+    };
+    let now = jiff::Timestamp::now()
+        .round(jiff::Unit::Second)
+        .map_err(AppError::internal)?;
+    let certificate = IssuedCertificate {
+        // Tokens have no serial; the issue time tells history entries apart.
+        serial: format!("token-{}", now.as_millisecond()),
+        issued_at: now.to_string(),
+        // The API server may cap the lifetime (--service-account-max-token-expiration).
+        expires_at: expires
+            .0
+            .round(jiff::Unit::Second)
+            .map_err(AppError::internal)?
+            .to_string(),
+        namespace: namespace.to_string(),
+        requested_days: days,
+        kind: CredentialKind::ServiceAccount,
+        revoked_at: None,
+    };
+    Ok((json!({ "token": token }), certificate))
 }
 
 /// Read serial and expiry from the signed certificate.
@@ -169,6 +255,8 @@ fn describe(
         expires_at: ts(cert.validity().not_after.timestamp())?,
         namespace,
         requested_days,
+        kind: CredentialKind::Certificate,
+        revoked_at: None,
     })
 }
 
@@ -177,14 +265,30 @@ async fn record(state: &AppState, user: &str, cert: &IssuedCertificate) -> AppRe
     let api: Api<IcecubeUser> = Api::all(state.client.clone());
     // Re-read right before writing to keep the window for concurrent issues small.
     let current = api.get_status(user).await?;
-    let mut certificates = current.status.map(|s| s.certificates).unwrap_or_default();
+    let status = current.status.unwrap_or_default();
+    // Track the latest certificate expiry separately, so dropping old entries
+    // from the history never shortens how long a deleted name stays blocked.
+    let valid_until = status
+        .certificates
+        .iter()
+        .filter(|c| c.kind == CredentialKind::Certificate)
+        .map(|c| c.expires_at.as_str())
+        .chain(status.certificates_valid_until.as_deref())
+        .chain((cert.kind == CredentialKind::Certificate).then_some(cert.expires_at.as_str()))
+        .filter_map(|s| s.parse::<jiff::Timestamp>().ok())
+        .max()
+        .map(|t| t.to_string());
+    let mut certificates = status.certificates;
     certificates.push(cert.clone());
     let skip = certificates.len().saturating_sub(HISTORY);
     certificates.drain(..skip);
     api.patch_status(
         user,
         &PatchParams::default(),
-        &Patch::Merge(json!({ "status": { "certificates": certificates } })),
+        &Patch::Merge(json!({ "status": {
+            "certificates": certificates,
+            "certificatesValidUntil": valid_until,
+        } })),
     )
     .await?;
     Ok(())

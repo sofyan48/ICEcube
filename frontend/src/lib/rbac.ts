@@ -1,6 +1,6 @@
 /**
  * Client-side model of the RBAC objects the backend creates. Naming and labels
- * must stay in sync with backend/src/model.rs.
+ * must stay in sync with backend/src/library/model.rs.
  */
 import type { Binding, PolicyRule, Template, TemplateInput } from './types'
 

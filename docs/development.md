@@ -83,7 +83,36 @@ binary serves `/api`, `/healthz` and the UI by itself. The container image (dist
 - **Shutdown:** the process stops cleanly on SIGTERM.
 
 The service is stateless: everything lives in the Kubernetes API, and private keys are never
-stored. Keep it at one replica, though: two pods reconciling the same user concurrently could race.
+stored.
+
+### Controller
+
+The API only writes `IcecubeUser`/`IcecubeGroup` objects. A kube-runtime controller
+(`backend/src/usecase/controller.rs`) turns them into RoleBindings/ClusterRoleBindings and, for
+token users, a ServiceAccount. So `kubectl apply`/GitOps works the same as the UI, and bindings
+deleted or edited by hand are restored. It reconciles on user, group, namespace and owned-object
+changes, plus every 5 minutes.
+
+A finalizer (`icecube.io/cleanup`) revokes access when a user is deleted. If client certificates
+issued to that user are still valid, the name is recorded in the ConfigMap
+`icecube-deleted-users` and a new certificate user with the same name gets no access until they
+expire (`status.blocked` says why). The API refuses such names with `409`; to reuse one on
+purpose, create the user with `allowNameReuse: true` (or annotate the IcecubeUser with
+`icecube.io/allow-name-reuse: "true"`). ServiceAccount users are never blocked.
+
+Every replica serves the UI/API; only the holder of the Lease `icecube-controller` runs the
+controller, so several replicas are safe.
+
+### Credentials
+
+`spec.credential` picks how a user signs in:
+
+- `certificate` (default): client certificate from the CSR API, bound as `User <name>`. Cannot be
+  revoked; it works until it expires.
+- `serviceAccount`: token from the TokenRequest API for the ServiceAccount
+  `icecube-user-<name>` in ICEcube's namespace. `POST /api/users/{name}/revoke` deletes that
+  ServiceAccount, which invalidates every token at once; the controller recreates it for new
+  tokens. Suited for CI/CD and users that must be revocable.
 
 Build the frontend first, because it is embedded at compile time. `make build` does both steps,
 and a release build without `frontend/dist` fails with instructions. Set `ICECUBE_ALLOW_NO_UI=1`
@@ -139,7 +168,8 @@ the backend runs from `backend/`.
 | `BASIC_AUTH_USER`       | `admin`            | UI/API username |
 | `CLUSTER_NAME`          | `kubernetes`       | Cluster name used in generated kubeconfigs |
 | `CONTROL_PLANE_ADDRESS` | client's API URL   | Public API server URL written into kubeconfigs |
-| `ICECUBE_CERT_DAYS`     | `365`              | Maximum certificate lifetime |
+| `ICECUBE_CERT_DAYS`     | `30`               | Maximum certificate/token lifetime |
+| `ICECUBE_LEADER_ELECTION` | `true`           | Run the controller only on the Lease holder |
 | `ICECUBE_LISTEN`        | `0.0.0.0:4000`     | Listen address |
 | `ICECUBE_INSTALL_CRDS`  | `true`             | Apply the CRDs on startup |
 | `ICECUBE_STORE_KUBECONFIGS` | `true`         | Keep each user's latest kubeconfig in a Secret |

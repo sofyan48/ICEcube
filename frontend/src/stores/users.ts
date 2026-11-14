@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { api, ApiError } from '@/lib/api'
 import { sortBindings } from '@/lib/rbac'
 import { certState, latestCert, type CertState } from '@/lib/certs'
-import type { Binding, IssuedKubeconfig, User } from '@/lib/types'
+import type { Binding, CredentialKind, IssuedKubeconfig, User } from '@/lib/types'
 import { useGroupsStore } from './groups'
 
 export interface UserInput {
@@ -11,6 +11,9 @@ export interface UserInput {
   description: string
   bindings: Binding[]
   groups: string[]
+  credential: CredentialKind
+  /** Create anyway when the name belonged to a recently deleted user. */
+  allowNameReuse?: boolean
 }
 
 export const useUsersStore = defineStore('users', () => {
@@ -69,6 +72,8 @@ export const useUsersStore = defineStore('users', () => {
       ...u,
       groups: [...(u.groups ?? [])].sort(),
       certificates: u.certificates ?? [],
+      credential: u.credential ?? 'certificate',
+      blocked: u.blocked ?? null,
       bindings: sortBindings(u.bindings.map((b) => ({ ...b, namespace: b.namespace ?? null }))),
     }
   }
@@ -90,7 +95,7 @@ export const useUsersStore = defineStore('users', () => {
    * the server rejects the change.
    */
   async function update(input: UserInput) {
-    const { name, ...body } = input
+    const { name, allowNameReuse: _, ...body } = input
     const previous = byName.value.get(name)
     if (previous) upsert({ ...previous, ...body })
     try {
@@ -116,7 +121,7 @@ export const useUsersStore = defineStore('users', () => {
   const issuedThisSession = ref<Record<string, IssuedKubeconfig>>({})
 
   const isValid = (k: IssuedKubeconfig | undefined) =>
-    !!k && Date.parse(k.certificate.expiresAt) > Date.now()
+    !!k && !k.certificate.revokedAt && Date.parse(k.certificate.expiresAt) > Date.now()
 
   function sessionKubeconfig(name: string): IssuedKubeconfig | undefined {
     const k = issuedThisSession.value[name]
@@ -160,6 +165,14 @@ export const useUsersStore = defineStore('users', () => {
     return remember(name, await api.post<IssuedKubeconfig>(path))
   }
 
+  /** Invalidate every token of a ServiceAccount user right away. */
+  async function revoke(name: string) {
+    const user = upsert(await api.post<User>(`/users/${encodeURIComponent(name)}/revoke`))
+    const { [name]: _, ...rest } = issuedThisSession.value
+    issuedThisSession.value = rest
+    return user
+  }
+
   const stateOf = (u: User): CertState => certState(latestCert(u))
 
   function reset() {
@@ -184,6 +197,7 @@ export const useUsersStore = defineStore('users', () => {
     remove,
     issueKubeconfig,
     reissueKubeconfig,
+    revoke,
     sessionKubeconfig,
     fetchKubeconfig,
     stateOf,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RadioGroupItem, RadioGroupRoot, ToggleGroupItem, ToggleGroupRoot } from 'reka-ui'
-import { Globe, Layers, Plus, Trash2 } from 'lucide-vue-next'
+import { Globe, Layers, LoaderCircle, Plus, Trash2 } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { errorMessage } from '@/lib/api'
 import { clusterRoleObject, COMMON_VERBS, validateTemplate } from '@/lib/rbac'
@@ -11,6 +11,7 @@ import { useToastStore } from '@/stores/toast'
 import UiButton from './ui/UiButton.vue'
 import UiCode from './ui/UiCode.vue'
 import UiDialog from './ui/UiDialog.vue'
+import UiMultiPick, { type PickOption } from './ui/UiMultiPick.vue'
 import UiTags from './ui/UiTags.vue'
 
 interface RuleDraft {
@@ -62,7 +63,94 @@ watch(open, (isOpen) => {
   description.value = t?.description ?? ''
   scope.value = t?.scope ?? 'namespaced'
   rules.value = t ? t.rules.map(toDraft) : [toDraft({})]
+  cluster.loadDiscovery().catch((e) => {
+    discoveryError.value = errorMessage(e)
+  })
 })
+
+/**
+ * Choices come from the cluster's discovery API, so only groups, resources
+ * and verbs that really exist can be picked. Without discovery (error or
+ * missing permission) the fields fall back to free text.
+ */
+const discoveryError = ref<string | null>(null)
+const discovered = computed(() => cluster.apiGroups)
+const discovering = computed(() => !discovered.value && !discoveryError.value)
+const freeText = computed(() => !discovered.value)
+
+// Drafts show the core group "" as "core" (see toDraft).
+const groupKey = (name: string) => (name === '' ? 'core' : name)
+const groupsByKey = computed(() => new Map((discovered.value ?? []).map((g) => [groupKey(g.name), g])))
+
+const groupOptions = computed<PickOption[]>(() => [
+  { value: '*', label: '*', hint: 'every API group' },
+  ...(discovered.value ?? []).map((g) => ({
+    value: groupKey(g.name),
+    hint: `${g.resources.length} resource${g.resources.length === 1 ? '' : 's'}`,
+  })),
+])
+
+/** Resources of the rule's selected groups (all groups for "*"). */
+function resourcesOf(rule: RuleDraft) {
+  const all = rule.apiGroups.includes('*')
+  const groups = all ? [...groupsByKey.value.values()] : rule.apiGroups.flatMap((k) => groupsByKey.value.get(k) ?? [])
+  const out = new Map<string, { namespaced: boolean; kind: string; verbs: Set<string>; groups: string[]; rbacOnly: boolean }>()
+  for (const g of groups) {
+    for (const r of g.resources) {
+      const e = out.get(r.name)
+      if (e) {
+        r.verbs.forEach((v) => e.verbs.add(v))
+        e.groups.push(groupKey(g.name))
+      } else {
+        out.set(r.name, { namespaced: r.namespaced, kind: r.kind, verbs: new Set(r.verbs), groups: [groupKey(g.name)], rbacOnly: r.rbacOnly })
+      }
+    }
+  }
+  return out
+}
+
+function resourceOptions(rule: RuleDraft): PickOption[] {
+  const multi = rule.apiGroups.length > 1 || rule.apiGroups.includes('*')
+  const opts = [...resourcesOf(rule)].map(([name, r]) => ({
+    value: name,
+    hint: [
+      r.rbacOnly ? 'RBAC only' : r.kind,
+      r.namespaced ? 'namespaced' : 'cluster',
+      multi ? r.groups.join(', ') : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  }))
+  opts.sort((a, b) => a.value.localeCompare(b.value))
+  return rule.apiGroups.length ? [{ value: '*', hint: 'every resource of these groups' }, ...opts] : []
+}
+
+/** Verbs the rule's targets support (union over the selected resources). */
+function supportedVerbs(rule: RuleDraft): Set<string> {
+  if (rule.nonResourceURLs.length) return new Set(['get', 'head', 'post', 'put', 'patch', 'delete'])
+  if (freeText.value) return new Set(COMMON_VERBS)
+  const res = resourcesOf(rule)
+  const picked = rule.resources.includes('*') ? [...res.values()] : rule.resources.flatMap((n) => res.get(n) ?? [])
+  return new Set(picked.flatMap((r) => [...r.verbs]))
+}
+
+/** Supported verbs in a familiar order, plus selected ones that no longer fit (so they can be removed). */
+function verbOptions(rule: RuleDraft): string[] {
+  const verbs = supportedVerbs(rule)
+  const order = [...COMMON_VERBS, 'bind', 'escalate', 'impersonate', 'approve', 'sign', 'attest', 'use']
+  const sorted = [...verbs].sort((a, b) => {
+    const ia = order.indexOf(a)
+    const ib = order.indexOf(b)
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b)
+  })
+  // Keep verbs already in the rule visible (and deselectable) even if no longer offered.
+  return [...sorted, ...rule.verbs.filter((v) => v !== '*' && !verbs.has(v)), '*']
+}
+
+const unsupportedVerbs = (rule: RuleDraft) => {
+  const verbs = supportedVerbs(rule)
+  return rule.verbs.filter((v) => v !== '*' && !verbs.has(v))
+}
 
 const input = computed(() => ({
   name: name.value,
@@ -134,6 +222,12 @@ const scopeClass =
         </RadioGroupRoot>
 
         <div class="space-y-3">
+          <p v-if="discovering" class="flex items-center gap-2 text-xs text-zinc-500">
+            <LoaderCircle class="size-3.5 animate-spin" /> Reading API groups and resources from the cluster…
+          </p>
+          <p v-else-if="discoveryError" class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+            Could not read the cluster's API resources ({{ discoveryError }}), so values are typed freely.
+          </p>
           <div v-for="(rule, i) in rules" :key="rule.id" class="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
             <div class="mb-3 flex items-center justify-between">
               <span class="text-xs font-semibold tracking-wide text-zinc-400 uppercase">Rule {{ i + 1 }}</span>
@@ -143,14 +237,30 @@ const scopeClass =
             </div>
             <div class="grid gap-3 sm:grid-cols-2">
               <template v-if="!rule.nonResourceURLs.length">
-                <label class="block">
+                <div class="block">
                   <span class="mb-1 block text-xs text-zinc-500">API groups</span>
-                  <UiTags v-model="rule.apiGroups" mono placeholder="core, apps…" />
-                </label>
-                <label class="block">
+                  <UiTags v-if="freeText && !discovering" v-model="rule.apiGroups" mono placeholder="core, apps…" />
+                  <UiMultiPick
+                    v-else
+                    v-model="rule.apiGroups"
+                    :options="groupOptions"
+                    mono
+                    :placeholder="discovering ? 'Loading from cluster…' : 'Pick a group…'"
+                    unknown-hint="This API group is not served by the cluster"
+                  />
+                </div>
+                <div class="block">
                   <span class="mb-1 block text-xs text-zinc-500">Resources</span>
-                  <UiTags v-model="rule.resources" mono placeholder="pods, deployments…" />
-                </label>
+                  <UiTags v-if="freeText && !discovering" v-model="rule.resources" mono placeholder="pods, deployments…" />
+                  <UiMultiPick
+                    v-else
+                    v-model="rule.resources"
+                    :options="resourceOptions(rule)"
+                    mono
+                    :placeholder="rule.apiGroups.length ? 'Pick resources…' : 'Pick an API group first'"
+                    unknown-hint="Not a resource of the selected API groups"
+                  />
+                </div>
                 <label class="block sm:col-span-2">
                   <span class="mb-1 block text-xs text-zinc-500">Resource names <span class="text-zinc-400">(optional, restricts to specific objects)</span></span>
                   <UiTags v-model="rule.resourceNames" mono placeholder="any" />
@@ -162,9 +272,23 @@ const scopeClass =
               </label>
             </div>
             <div class="mt-3">
-              <span class="mb-1.5 block text-xs text-zinc-500">Verbs</span>
-              <ToggleGroupRoot v-model="rule.verbs" type="multiple" class="flex flex-wrap gap-1.5">
-                <ToggleGroupItem v-for="v in [...COMMON_VERBS, '*']" :key="v" :value="v" :class="verbClass">{{ v }}</ToggleGroupItem>
+              <span class="mb-1.5 block text-xs text-zinc-500">
+                Verbs
+                <span v-if="!freeText && !rule.nonResourceURLs.length" class="text-zinc-400">(supported by the selected resources)</span>
+              </span>
+              <p v-if="!freeText && !rule.nonResourceURLs.length && !rule.resources.length" class="text-xs text-zinc-400">
+                Pick resources to see their verbs.
+              </p>
+              <ToggleGroupRoot v-else v-model="rule.verbs" type="multiple" class="flex flex-wrap gap-1.5">
+                <ToggleGroupItem
+                  v-for="v in verbOptions(rule)"
+                  :key="v"
+                  :value="v"
+                  :class="[verbClass, unsupportedVerbs(rule).includes(v) ? '!border-amber-400 data-[state=on]:!bg-amber-500' : '']"
+                  :title="unsupportedVerbs(rule).includes(v) ? 'None of the selected resources support this verb' : undefined"
+                >
+                  {{ v }}
+                </ToggleGroupItem>
               </ToggleGroupRoot>
             </div>
           </div>

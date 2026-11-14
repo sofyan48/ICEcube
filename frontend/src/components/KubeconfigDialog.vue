@@ -132,7 +132,8 @@ const shortened = computed(() => {
   return c.requestedDays * 86_400_000 - (Date.parse(c.expiresAt) - Date.parse(c.issuedAt)) > 3_600_000
 })
 
-const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expired: 'expired' } as const
+const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expired: 'expired', revoked: 'revoked' } as const
+const isToken = computed(() => props.user?.credential === 'serviceAccount')
 </script>
 
 <template>
@@ -140,7 +141,7 @@ const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expire
     v-model:open="open"
     :width="shown ? '2xl' : 'lg'"
     :title="`${reissue ? 'Re-issue kubeconfig' : 'Kubeconfig'} for ${user?.name ?? ''}`"
-    description="A client certificate signed by the cluster CA."
+    :description="isToken ? 'A ServiceAccount token; revoke it any time from the user menu.' : 'A client certificate signed by the cluster CA.'"
   >
     <!-- Issuing (re-issue opens straight into this) -->
     <div v-if="!shown && issuing && reissue" class="flex flex-col items-center gap-3 py-10 text-sm text-zinc-500">
@@ -185,17 +186,23 @@ const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expire
         </div>
       </div>
 
-      <div class="flex gap-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+      <div v-if="!isToken" class="flex gap-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
         <ShieldAlert class="size-4 shrink-0" />
         <p>
           Issuing a new certificate does not invalidate older ones; they keep working until they expire.
-          Prefer short lifetimes and re-issue when needed.
+          Prefer short lifetimes and re-issue when needed, or switch the user to a ServiceAccount token to be able to revoke.
+        </p>
+      </div>
+      <div v-else class="flex gap-3 rounded-xl bg-zinc-100 p-3 text-xs text-zinc-600 dark:bg-zinc-800/70 dark:text-zinc-400">
+        <ShieldAlert class="size-4 shrink-0" />
+        <p>
+          Older tokens keep working until they expire, unless you use <strong>Revoke all tokens</strong>, which invalidates them all at once.
         </p>
       </div>
 
       <details v-if="user?.certificates.length" class="text-xs">
         <summary class="flex cursor-pointer items-center gap-1.5 text-zinc-500 select-none hover:text-zinc-800 dark:hover:text-zinc-200">
-          <History class="size-3.5" /> Certificate history ({{ user.certificates.length }})
+          <History class="size-3.5" /> Credential history ({{ user.certificates.length }})
         </summary>
         <table class="mt-2 w-full">
           <thead class="text-zinc-400">
@@ -203,6 +210,7 @@ const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expire
               <th class="py-1 text-left font-medium">Issued</th>
               <th class="py-1 text-left font-medium">Expires</th>
               <th class="py-1 text-left font-medium">Namespace</th>
+              <th class="py-1 text-left font-medium">Kind</th>
               <th class="py-1 text-left font-medium">Status</th>
             </tr>
           </thead>
@@ -211,7 +219,8 @@ const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expire
               <td class="py-1.5">{{ formatDate(c.issuedAt) }}</td>
               <td class="py-1.5">{{ formatDate(c.expiresAt) }}</td>
               <td class="py-1.5 font-mono">{{ c.namespace }}</td>
-              <td class="py-1.5" :class="{ 'text-red-600': certState(c) === 'expired', 'text-amber-600': certState(c) === 'expiring' }">
+              <td class="py-1.5">{{ c.kind === 'serviceAccount' ? 'token' : 'cert' }}</td>
+              <td class="py-1.5" :class="{ 'text-red-600': certState(c) === 'expired' || certState(c) === 'revoked', 'text-amber-600': certState(c) === 'expiring' }">
                 {{ stateText[certState(c)] }}
               </td>
             </tr>
@@ -233,7 +242,7 @@ const stateText = { none: '', valid: 'active', expiring: 'expiring soon', expire
       <p class="rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800/70 dark:text-zinc-400">
         <template v-if="stores">
           {{ showingKept ? 'This is the latest kubeconfig issued for this user.' : 'Kubeconfig issued.' }}
-          ICEcube keeps it, so you can open and download it again later. It contains a private key: share it privately.
+          ICEcube keeps it, so you can open and download it again later. It contains a secret: share it privately.
         </template>
         <template v-else>
           Contains a private key that ICEcube does not store. It stays available in this tab until you reload or sign out;

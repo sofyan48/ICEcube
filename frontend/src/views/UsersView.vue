@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuRoot, DropdownMenuSeparator, DropdownMenuTrigger, ToggleGroupItem, ToggleGroupRoot } from 'reka-ui'
-import { Ellipsis, Eye, Globe, KeyRound, Pencil, Plus, RefreshCw, RotateCw, Search, Trash2, Users, UsersRound } from 'lucide-vue-next'
+import { Ban, Bot, Ellipsis, Eye, Globe, KeyRound, Pencil, Plus, RefreshCw, RotateCw, Search, ShieldOff, Trash2, Users, UsersRound } from 'lucide-vue-next'
 import { onMounted, ref } from 'vue'
 import CertBadge from '@/components/CertBadge.vue'
 import KubeconfigDialog from '@/components/KubeconfigDialog.vue'
@@ -29,6 +29,8 @@ const kubeconfigOpen = ref(false)
 const reissueMode = ref(false)
 const deleteOpen = ref(false)
 const deleting = ref(false)
+const revokeOpen = ref(false)
+const revoking = ref(false)
 
 async function refresh(force = false) {
   try {
@@ -52,6 +54,24 @@ function openDelete(u: User) {
   selected.value = u
   deleteOpen.value = true
 }
+function openRevoke(u: User) {
+  selected.value = u
+  revokeOpen.value = true
+}
+
+async function confirmRevoke() {
+  if (!selected.value) return
+  revoking.value = true
+  try {
+    await users.revoke(selected.value.name)
+    toast.success('Tokens revoked', `Every token of ${selected.value.name} stopped working.`)
+    revokeOpen.value = false
+  } catch (e) {
+    toast.error('Could not revoke tokens', errorMessage(e))
+  } finally {
+    revoking.value = false
+  }
+}
 
 async function confirmDelete() {
   if (!selected.value) return
@@ -67,8 +87,8 @@ async function confirmDelete() {
   }
 }
 
-const canIssue = (u: User) => groups.effective(u).length > 0
-const shouldReissue = (u: User) => ['expiring', 'expired'].includes(users.stateOf(u))
+const canIssue = (u: User) => !u.blocked && groups.effective(u).length > 0
+const shouldReissue = (u: User) => ['expiring', 'expired', 'revoked'].includes(users.stateOf(u))
 /** A kubeconfig that can be opened again without issuing a new one. */
 const canView = (u: User) =>
   !!users.sessionKubeconfig(u.name) ||
@@ -149,6 +169,10 @@ const filterItem =
               <span class="truncate font-mono text-sm font-medium">{{ u.name }}</span>
               <span v-if="u.description" class="truncate text-xs text-zinc-500">· {{ u.description }}</span>
               <CertBadge :cert="latestCert(u)" />
+              <UiBadge v-if="u.credential === 'serviceAccount'" tone="violet" title="Signs in with a revocable ServiceAccount token">
+                <Bot /> token
+              </UiBadge>
+              <UiBadge v-if="u.blocked" tone="amber" :title="u.blocked"><Ban /> blocked</UiBadge>
             </div>
             <div class="mt-1 flex flex-wrap gap-1">
               <UiBadge v-for="g in u.groups" :key="`g:${g}`" tone="green"><UsersRound /> {{ g }}</UiBadge>
@@ -194,6 +218,13 @@ const filterItem =
                   <RotateCw /> {{ latestCert(u) ? 'Re-issue as before' : 'Quick issue' }}
                 </DropdownMenuItem>
                 <DropdownMenuItem :class="menuItem" :disabled="!canIssue(u)" @select="openKubeconfig(u)"><KeyRound /> Issue kubeconfig…</DropdownMenuItem>
+                <DropdownMenuItem
+                  v-if="u.credential === 'serviceAccount'"
+                  :class="[menuItem, '!text-red-600 [&_svg]:!text-red-500']"
+                  @select="openRevoke(u)"
+                >
+                  <ShieldOff /> Revoke all tokens
+                </DropdownMenuItem>
                 <DropdownMenuSeparator class="my-1 h-px bg-zinc-100 dark:bg-zinc-800" />
                 <DropdownMenuItem :class="[menuItem, '!text-red-600 [&_svg]:!text-red-500']" @select="openDelete(u)"><Trash2 /> Delete user</DropdownMenuItem>
               </DropdownMenuContent>
@@ -226,9 +257,17 @@ const filterItem =
     <UiConfirm
       v-model:open="deleteOpen"
       :title="`Delete ${selected?.name}?`"
-      description="All of this user's bindings are removed immediately. Issued certificates stop working because they no longer grant anything."
+      description="All of this user's bindings are removed immediately. Issued certificates stop working because they no longer grant anything. While they are still valid, the name cannot be reused for a certificate user."
       :loading="deleting"
       @confirm="confirmDelete"
+    />
+    <UiConfirm
+      v-model:open="revokeOpen"
+      :title="`Revoke all tokens of ${selected?.name}?`"
+      description="Every kubeconfig issued to this user stops working immediately. The user keeps their access settings; issue a new kubeconfig to sign in again."
+      confirm-label="Revoke"
+      :loading="revoking"
+      @confirm="confirmRevoke"
     />
   </div>
 </template>
